@@ -1,0 +1,115 @@
+/* 全局样式 */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* 隐藏默认菜单和页脚 */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+/* 主容器 */
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+    max-width: 1200px;
+}
+
+/* 侧边栏美化 */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: white;
+}
+
+[data-testid="stSidebar"] .stMarkdown h1,
+[data-testid="stSidebar"] .stMarkdown h2,
+[data-testid="stSidebar"] .stMarkdown h3 {
+    color: #e94560 !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown li {
+    color: #a8a8b3 !important;
+}
+
+/* 功能卡片 */
+div[data-testid="stExpander"] {
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 0.8rem;
+}
+
+div[data-testid="stExpander"]:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    border-color: #667eea;
+}
+
+/* 按钮美化 */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+}
+
+/* 成功/警告消息 */
+.stSuccess {
+    border-radius: 8px;
+}
+
+.stAlert {
+    border-radius: 8px;
+}
+
+/* 数据表格 */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* 选择框 */
+.stSelectbox > div > div {
+    border-radius: 8px;
+}
+
+/* 标签页 */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px 8px 0 0;
+    padding: 8px 20px;
+}
+
+/* 指标卡片 */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* 文件上传区域 */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #667eea;
+    border-radius: 12px;
+    padding: 20px;
+    background: rgba(102, 126, 234, 0.03);
+}
+
+/* 分隔线 */
+hr {
+    border: none;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #667eea, transparent);
+    margin: 1.5rem 0;
+}
