@@ -1119,129 +1119,432 @@ elif menu == "📊 统计汇总":
 
 
 # ================================================================
-#                        🧮 公式引擎
+#                        🧮 公式引擎（小白友好版）
 # ================================================================
 elif menu == "🧮 公式引擎":
-    st.subheader("🧮 自定义公式引擎")
+    st.subheader("🧮 智能公式生成器")
+    st.caption("✨ 全程点选，无需写代码！选列名 + 选运算 + 点生成 = 完成")
     
-    t1, t2, t3 = st.tabs(["📚 公式模板", "✏️ 自定义公式", "🎛️ 条件计算器"])
+    t1, t2, t3, t4 = st.tabs(["🎯 快捷公式（推荐）", "🔧 公式构建器", "📚 常用模板", "💻 高级模式"])
     
+    # ============================================================
+    # Tab 1: 快捷公式 - 一键完成最常见需求
+    # ============================================================
     with t1:
-        st.markdown("##### 点击【使用】快速填入公式")
+        st.markdown("##### 👇 选择您要做的事情")
         
-        templates = {
-            "💰 财务": {
-                "含税金额": "df['金额'] * 1.13",
-                "税额": "df['金额'] * 0.13",
-                "利润率%": "(df['收入']-df['成本'])/df['收入']*100",
-                "毛利": "df['收入'] - df['成本']",
-                "折扣价": "df['原价'] * df['折扣率']",
-            },
-            "📊 统计": {
-                "Z-Score标准化": "(df['值']-df['值'].mean())/df['值'].std()",
-                "Min-Max归一化": "(df['值']-df['值'].min())/(df['值'].max()-df['值'].min())",
-                "移动平均(3期)": "df['值'].rolling(3).mean()",
-                "累计占比": "df['值'].cumsum()/df['值'].sum()",
-            },
-            "📝 文本": {
-                "拼接两列": "df['列A'].astype(str) + '-' + df['列B'].astype(str)",
-                "取前N字符": "df['列A'].astype(str).str[:5]",
-                "添加前缀": "'PRE_' + df['列A'].astype(str)",
-                "提取数字": "df['列A'].astype(str).str.extract(r'(\\d+)', expand=False)",
-            },
-            "🔢 条件": {
-                "正数归零": "df['值'].clip(upper=0)",
-                "负数归零": "df['值'].clip(lower=0)",
-                "限定范围": "df['值'].clip(lower=0, upper=100)",
-                "空值填0": "df['值'].fillna(0)",
-                "条件赋值": "np.where(df['值']>100, '高', '低')",
-            },
-        }
+        scene = st.selectbox(
+            "我想要...",
+            [
+                "💰 计算含税金额（金额 × 1.13）",
+                "💰 计算税额（金额 × 13%）",
+                "💰 计算折扣价（原价 × 折扣率）",
+                "💰 计算利润（收入 - 成本）",
+                "💰 计算利润率%（(收入-成本)/收入×100）",
+                "📊 两列相加",
+                "📊 两列相减",
+                "📊 两列相乘",
+                "📊 两列相除",
+                "📊 多列求和",
+                "📊 多列求平均",
+                "🔢 某列 × 固定数字",
+                "🔢 某列 ÷ 固定数字",
+                "🔢 某列 + 固定数字",
+                "🔢 某列 - 固定数字",
+                "🔢 某列保留N位小数",
+                "🔢 某列百分比（×100加%）",
+                "📝 两列文本拼接",
+                "📝 添加前缀",
+                "📝 添加后缀",
+            ],
+            key="quick_scene"
+        )
         
-        for cat, items in templates.items():
-            with st.expander(cat):
-                for name, formula in items.items():
-                    c1, c2, c3 = st.columns([2, 5, 1])
-                    with c1: st.markdown(f"**{name}**")
-                    with c2: st.code(formula, language="python")
-                    with c3:
-                        if st.button("使用", key=f"t_{cat}_{name}"):
-                            st.session_state['formula_input'] = formula
+        st.markdown("---")
+        
+        # ============ 财务场景 ============
+        if "含税金额" in scene:
+            col = st.selectbox("📌 选择「金额」列", numeric_cols, key="q1_c")
+            new_name = st.text_input("✏️ 新列名", value="含税金额", key="q1_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} × 1.13</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q1_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = (df[col] * 1.13).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成新列 [{new_name}]"); st.rerun()
+        
+        elif "税额" in scene:
+            col = st.selectbox("📌 选择「金额」列", numeric_cols, key="q2_c")
+            rate = st.number_input("💯 税率(%)", value=13.0, key="q2_r")
+            new_name = st.text_input("✏️ 新列名", value="税额", key="q2_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} × {rate}%</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q2_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = (df[col] * rate / 100).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "折扣价" in scene:
+            c1, c2 = st.columns(2)
+            with c1: col_a = st.selectbox("📌 「原价」列", numeric_cols, key="q3_a")
+            with c2: col_b = st.selectbox("📌 「折扣率」列", numeric_cols, key="q3_b")
+            new_name = st.text_input("✏️ 新列名", value="折扣价", key="q3_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} × {col_b}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q3_b2", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = (df[col_a] * df[col_b]).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif scene.startswith("💰 计算利润（"):
+            c1, c2 = st.columns(2)
+            with c1: col_a = st.selectbox("📌 「收入」列", numeric_cols, key="q4_a")
+            with c2: col_b = st.selectbox("📌 「成本」列", numeric_cols, key="q4_b")
+            new_name = st.text_input("✏️ 新列名", value="利润", key="q4_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} - {col_b}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q4_b2", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = (df[col_a] - df[col_b]).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "利润率" in scene:
+            c1, c2 = st.columns(2)
+            with c1: col_a = st.selectbox("📌 「收入」列", numeric_cols, key="q5_a")
+            with c2: col_b = st.selectbox("📌 「成本」列", numeric_cols, key="q5_b")
+            new_name = st.text_input("✏️ 新列名", value="利润率%", key="q5_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>({col_a} - {col_b}) / {col_a} × 100</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q5_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = ((df[col_a] - df[col_b]) / df[col_a].replace(0, np.nan) * 100).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        # ============ 两列运算 ============
+        elif scene in ["📊 两列相加", "📊 两列相减", "📊 两列相乘", "📊 两列相除"]:
+            op_map = {"相加": ("+", lambda a,b: a+b), "相减": ("-", lambda a,b: a-b),
+                      "相乘": ("×", lambda a,b: a*b), "相除": ("÷", lambda a,b: a/b.replace(0,np.nan))}
+            op_key = [k for k in op_map if k in scene][0]
+            symbol, func = op_map[op_key]
+            
+            c1, c2 = st.columns(2)
+            with c1: col_a = st.selectbox("📌 列A", numeric_cols, key=f"q6_{symbol}_a")
+            with c2: col_b = st.selectbox("📌 列B", numeric_cols, key=f"q6_{symbol}_b")
+            new_name = st.text_input("✏️ 新列名", value=f"{col_a}{symbol}{col_b}", key=f"q6_{symbol}_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} {symbol} {col_b}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key=f"q6_{symbol}_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = func(df[col_a], df[col_b]).round(4)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        # ============ 多列汇总 ============
+        elif "多列求和" in scene:
+            cols = st.multiselect("📌 选择要求和的多列", numeric_cols, key="q7_c")
+            new_name = st.text_input("✏️ 新列名", value="合计", key="q7_n")
+            if cols:
+                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{" + ".join(cols)}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q7_b", type="primary", use_container_width=True) and cols:
+                save_snapshot()
+                df[new_name] = df[cols].sum(axis=1).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "多列求平均" in scene:
+            cols = st.multiselect("📌 选择要计算平均值的多列", numeric_cols, key="q8_c")
+            new_name = st.text_input("✏️ 新列名", value="平均值", key="q8_n")
+            if cols:
+                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>({" + ".join(cols)}) ÷ {len(cols)}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q8_b", type="primary", use_container_width=True) and cols:
+                save_snapshot()
+                df[new_name] = df[cols].mean(axis=1).round(2)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        # ============ 列与固定数字运算 ============
+        elif scene in ["🔢 某列 × 固定数字", "🔢 某列 ÷ 固定数字", 
+                       "🔢 某列 + 固定数字", "🔢 某列 - 固定数字"]:
+            op_map2 = {"×": (lambda a,n: a*n), "÷": (lambda a,n: a/n if n!=0 else np.nan),
+                       "+": (lambda a,n: a+n), "-": (lambda a,n: a-n)}
+            symbol = [s for s in op_map2 if s in scene][0]
+            
+            c1, c2 = st.columns(2)
+            with c1: col = st.selectbox("📌 选择列", numeric_cols, key=f"q9_{symbol}_c")
+            with c2: num = st.number_input("🔢 输入数字", value=1.0, key=f"q9_{symbol}_n")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}{symbol}{num}", key=f"q9_{symbol}_nm")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} {symbol} {num}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key=f"q9_{symbol}_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = op_map2[symbol](df[col], num).round(4)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "保留N位小数" in scene:
+            col = st.selectbox("📌 选择列", numeric_cols, key="q10_c")
+            digits = st.number_input("🔢 保留小数位数", 0, 10, 2, key="q10_d")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}_四舍五入", key="q10_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>四舍五入({col}, {digits}位小数)</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q10_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = df[col].round(digits)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "百分比" in scene:
+            col = st.selectbox("📌 选择列", numeric_cols, key="q11_c")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}_百分比", key="q11_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} × 100 + "%"</b>（例：0.25 → 25.00%）</div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q11_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = (df[col] * 100).round(2).astype(str) + '%'
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        # ============ 文本场景 ============
+        elif "两列文本拼接" in scene:
+            c1, c2, c3 = st.columns(3)
+            with c1: col_a = st.selectbox("📌 列A", all_cols, key="q12_a")
+            with c2: sep = st.text_input("🔗 中间分隔符", value="-", key="q12_s")
+            with c3: col_b = st.selectbox("📌 列B", all_cols, key="q12_b")
+            new_name = st.text_input("✏️ 新列名", value="拼接结果", key="q12_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} + "{sep}" + {col_b}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q12_b2", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = df[col_a].astype(str) + sep + df[col_b].astype(str)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "添加前缀" in scene:
+            col = st.selectbox("📌 选择列", all_cols, key="q13_c")
+            prefix = st.text_input("✏️ 前缀文本", value="PRE_", key="q13_p")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}_加前缀", key="q13_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>"{prefix}" + {col}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q13_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = prefix + df[col].astype(str)
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+        
+        elif "添加后缀" in scene:
+            col = st.selectbox("📌 选择列", all_cols, key="q14_c")
+            suffix = st.text_input("✏️ 后缀文本", value="_END", key="q14_s")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}_加后缀", key="q14_n")
+            st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} + "{suffix}"</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q14_b", type="primary", use_container_width=True):
+                save_snapshot()
+                df[new_name] = df[col].astype(str) + suffix
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
     
+    # ============================================================
+    # Tab 2: 公式构建器 - 可视化拼接公式
+    # ============================================================
     with t2:
-        # 列名参考
-        with st.expander("📋 列名速查（点击复制）"):
-            ref = pd.DataFrame({
-                '列名': df.columns, '类型': df.dtypes.astype(str).values,
-                '公式引用': [f"df['{c}']" for c in df.columns]
-            })
-            st.dataframe(ref, use_container_width=True, hide_index=True)
+        st.markdown("##### 🔧 自由组合：列 + 运算符 + 列/数字")
+        st.caption("最多支持 5 个操作数组合（A 运算符 B 运算符 C...）")
         
-        formula = st.text_area("输入公式", value=st.session_state.get('formula_input', ''),
-                               height=100, key="formula_text",
-                               help="使用 df['列名'] 引用列，支持 numpy(np) 和 pandas(pd) 函数")
+        num_operands = st.slider("参与运算的项数", 2, 5, 2, key="fb_n")
         
-        new_col = st.text_input("新列名", value="计算结果", key="f_name")
+        # 初始化构建器状态
+        if 'builder_parts' not in st.session_state:
+            st.session_state.builder_parts = []
+        
+        operands = []  # 操作数
+        operators = []  # 运算符
+        
+        # 第一个操作数
+        st.markdown("**操作数 1**")
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            t = st.radio("类型", ["列", "数字"], key="fb_t_0", horizontal=True)
+        with c2:
+            if t == "列":
+                v = st.selectbox("选择列", numeric_cols, key="fb_v_0", label_visibility="collapsed")
+                operands.append(("col", v))
+            else:
+                v = st.number_input("输入数字", value=1.0, key="fb_v_0", label_visibility="collapsed")
+                operands.append(("num", v))
+        
+        # 后续操作数
+        for i in range(1, num_operands):
+            c1, c2, c3 = st.columns([1, 1, 3])
+            with c1:
+                op = st.selectbox(f"运算符", ["+", "-", "×", "÷"], key=f"fb_op_{i}")
+                operators.append(op)
+            with c2:
+                t = st.radio(f"类型", ["列", "数字"], key=f"fb_t_{i}", horizontal=True)
+            with c3:
+                if t == "列":
+                    v = st.selectbox("选择列", numeric_cols, key=f"fb_v_{i}", label_visibility="collapsed")
+                    operands.append(("col", v))
+                else:
+                    v = st.number_input("输入数字", value=1.0, key=f"fb_v_{i}", label_visibility="collapsed")
+                    operands.append(("num", v))
+        
+        # 构建可读公式
+        readable = str(operands[0][1])
+        for i, op in enumerate(operators):
+            readable += f" {op} {operands[i+1][1]}"
+        
+        st.markdown(f'<div class="formula-preview">📐 公式预览: <b>{readable}</b></div>', unsafe_allow_html=True)
         
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("👁️ 预览", key="b_fp", use_container_width=True) and formula:
+            round_digits = st.number_input("🔢 结果保留小数位", 0, 10, 2, key="fb_rd")
+        with c2:
+            fb_name = st.text_input("✏️ 新列名", value="构建结果", key="fb_name")
+        
+        if st.button("✅ 计算并生成新列", type="primary", use_container_width=True, key="fb_btn"):
+            save_snapshot()
+            try:
+                # 计算
+                def get_val(operand):
+                    typ, val = operand
+                    return df[val] if typ == "col" else val
+                
+                result = get_val(operands[0])
+                for i, op in enumerate(operators):
+                    next_val = get_val(operands[i+1])
+                    if op == "+": result = result + next_val
+                    elif op == "-": result = result - next_val
+                    elif op == "×": result = result * next_val
+                    elif op == "÷":
+                        if isinstance(next_val, pd.Series):
+                            result = result / next_val.replace(0, np.nan)
+                        else:
+                            result = result / next_val if next_val != 0 else np.nan
+                
+                if isinstance(result, pd.Series):
+                    df[fb_name] = result.round(round_digits)
+                else:
+                    df[fb_name] = round(result, round_digits)
+                
+                st.session_state.df = df
+                st.success(f"✅ 已生成 [{fb_name}]")
+                st.rerun()
+            except Exception as e:
+                st.error(f"计算失败: {e}")
+    
+    # ============================================================
+    # Tab 3: 常用模板（保留可视化、隐藏代码细节）
+    # ============================================================
+    with t3:
+        st.markdown("##### 📚 业务场景模板")
+        st.caption("点击应用按钮，按提示选择对应列即可")
+        
+        templates = {
+            "💼 销售数据": [
+                {"name": "销售提成（销售额×提成比例）", "type": "two_col_mul", "fields": ["销售额列", "提成比例列"], "result": "提成金额"},
+                {"name": "客单价（销售额÷订单数）", "type": "two_col_div", "fields": ["销售额列", "订单数列"], "result": "客单价"},
+                {"name": "环比增长率%", "type": "growth_rate", "fields": ["数值列"], "result": "环比增长率%"},
+            ],
+            "📦 库存管理": [
+                {"name": "库存金额（数量×单价）", "type": "two_col_mul", "fields": ["数量列", "单价列"], "result": "库存金额"},
+                {"name": "库存周转天数（库存÷日均销量）", "type": "two_col_div", "fields": ["库存列", "日均销量列"], "result": "周转天数"},
+            ],
+            "👤 员工管理": [
+                {"name": "实发工资（应发-五险一金-个税）", "type": "subtract_3", "fields": ["应发工资", "五险一金", "个税"], "result": "实发工资"},
+                {"name": "年薪（月薪×12）", "type": "col_mul_num", "fields": ["月薪列"], "num": 12, "result": "年薪"},
+            ],
+            "📈 数据分析": [
+                {"name": "Z-Score标准化", "type": "zscore", "fields": ["数值列"], "result": "标准化值"},
+                {"name": "Min-Max归一化到0-1", "type": "minmax", "fields": ["数值列"], "result": "归一化值"},
+                {"name": "占比%（每行÷总和）", "type": "pct", "fields": ["数值列"], "result": "占比%"},
+            ],
+        }
+        
+        for category, items in templates.items():
+            with st.expander(category, expanded=False):
+                for idx, tpl in enumerate(items):
+                    st.markdown(f"**📌 {tpl['name']}**")
+                    
+                    fields_data = {}
+                    if len(tpl['fields']) == 1:
+                        fields_data[tpl['fields'][0]] = st.selectbox(
+                            tpl['fields'][0], numeric_cols, key=f"tpl_{category}_{idx}_0")
+                    else:
+                        cols_ui = st.columns(len(tpl['fields']))
+                        for fi, f in enumerate(tpl['fields']):
+                            with cols_ui[fi]:
+                                fields_data[f] = st.selectbox(f, numeric_cols, key=f"tpl_{category}_{idx}_{fi}")
+                    
+                    result_name = st.text_input("结果列名", value=tpl['result'], key=f"tpl_{category}_{idx}_rn")
+                    
+                    if st.button(f"✅ 应用", key=f"tpl_{category}_{idx}_btn", type="primary"):
+                        save_snapshot()
+                        try:
+                            vals = list(fields_data.values())
+                            if tpl['type'] == "two_col_mul":
+                                df[result_name] = (df[vals[0]] * df[vals[1]]).round(2)
+                            elif tpl['type'] == "two_col_div":
+                                df[result_name] = (df[vals[0]] / df[vals[1]].replace(0, np.nan)).round(2)
+                            elif tpl['type'] == "subtract_3":
+                                df[result_name] = (df[vals[0]] - df[vals[1]] - df[vals[2]]).round(2)
+                            elif tpl['type'] == "col_mul_num":
+                                df[result_name] = (df[vals[0]] * tpl['num']).round(2)
+                            elif tpl['type'] == "growth_rate":
+                                df[result_name] = (df[vals[0]].pct_change() * 100).round(2)
+                            elif tpl['type'] == "zscore":
+                                df[result_name] = ((df[vals[0]] - df[vals[0]].mean()) / df[vals[0]].std()).round(4)
+                            elif tpl['type'] == "minmax":
+                                mn, mx = df[vals[0]].min(), df[vals[0]].max()
+                                df[result_name] = ((df[vals[0]] - mn) / (mx - mn)).round(4)
+                            elif tpl['type'] == "pct":
+                                total = df[vals[0]].sum()
+                                df[result_name] = (df[vals[0]] / total * 100).round(2).astype(str) + '%'
+                            
+                            st.session_state.df = df
+                            st.success(f"✅ 已生成 [{result_name}]")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"失败: {e}")
+                    
+                    st.markdown("---")
+    
+    # ============================================================
+    # Tab 4: 高级模式（保留给会写代码的人）
+    # ============================================================
+    with t4:
+        st.markdown("##### 💻 高级模式：直接写 Python/Pandas 公式")
+        st.caption("适合熟悉编程的用户，支持完整的 pandas 语法")
+        
+        with st.expander("📋 列名速查表"):
+            ref = pd.DataFrame({
+                '列名': df.columns,
+                '类型': df.dtypes.astype(str).values,
+                '公式中引用方式': [f"df['{c}']" for c in df.columns]
+            })
+            st.dataframe(ref, use_container_width=True, hide_index=True)
+        
+        formula = st.text_area(
+            "输入公式",
+            value="",
+            height=100,
+            placeholder="例如: df['金额'] * 1.13\n或: np.where(df['销售额']>1000, '高', '低')",
+            key="adv_formula"
+        )
+        
+        new_col = st.text_input("新列名", value="计算结果", key="adv_name")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("👁️ 预览前10行", key="adv_preview", use_container_width=True) and formula:
                 try:
-                    result = eval(formula, {"__builtins__":{}, "np":np, "pd":pd}, {"df":df})
+                    result = eval(formula, {"__builtins__": {}, "np": np, "pd": pd}, {"df": df})
                     st.write(result.head(10) if isinstance(result, pd.Series) else result)
                 except Exception as e:
                     st.error(f"❌ {e}")
         with c2:
-            if st.button("✅ 生成新列", key="b_fe", type="primary", use_container_width=True) and formula and new_col:
+            if st.button("✅ 生成新列", key="adv_exec", type="primary", use_container_width=True) and formula and new_col:
                 save_snapshot()
                 try:
-                    result = eval(formula, {"__builtins__":{}, "np":np, "pd":pd}, {"df":df})
+                    result = eval(formula, {"__builtins__": {}, "np": np, "pd": pd}, {"df": df})
                     df[new_col] = result
                     st.session_state.df = df
                     st.success(f"✅ 已生成 [{new_col}]")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"❌ {e}")
-    
-    with t3:
-        st.markdown("##### 🎛️ 可视化条件计算（不用写代码）")
-        
-        c1, c2, c3 = st.columns(3)
-        with c1: cc3 = st.selectbox("条件列", all_cols, key="vc_c")
-        with c2: co3 = st.selectbox("条件", [">",">=","<","<=","==","!=","包含"], key="vc_o")
-        with c3: cv3 = st.text_input("条件值", key="vc_v")
-        
-        c1, c2 = st.columns(2)
-        with c1: tf = st.text_input("条件为真 =", value="df['列A']*1.1", key="vc_t",
-                                     help="可以是固定值如100，也可以是公式如df['价格']*0.9")
-        with c2: ff = st.text_input("条件为假 =", value="df['列A']*0.9", key="vc_f")
-        
-        rn = st.text_input("结果列名", value="条件计算结果", key="vc_n")
-        
-        if st.button("✅ 执行条件计算", key="b_vc", type="primary", use_container_width=True) and cv3:
-            save_snapshot()
-            try:
-                cd3 = df[cc3]
-                try:
-                    cvn = float(cv3)
-                    cd3 = pd.to_numeric(cd3, errors='coerce')
-                except: cvn = cv3
-                
-                om4 = {">":cd3>cvn, ">=":cd3>=cvn, "<":cd3<cvn, "<=":cd3<=cvn,
-                       "==":cd3==cvn, "!=":cd3!=cvn,
-                       "包含": cd3.astype(str).str.contains(str(cv3), na=False)}
-                cond = om4[co3]
-                
-                ctx = {"__builtins__":{}, "np":np, "pd":pd, "df":df}
-                try: tr = eval(tf, ctx)
-                except: tr = tf
-                try: fr = eval(ff, ctx)
-                except: fr = ff
-                
-                df[rn] = np.where(cond, tr, fr)
-                st.session_state.df = df
-                st.success(f"✅ 已生成 [{rn}]")
-            except Exception as e:
-                st.error(f"失败: {e}")
 
 
 # ================================================================
