@@ -1,115 +1,265 @@
-/* 全局样式 */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* ========== 全局样式 ========== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-/* 隐藏默认菜单和页脚 */
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
+/* 隐藏默认元素 */
+#MainMenu, footer, header {visibility: hidden;}
 
-/* 主容器 */
 .main .block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    max-width: 1200px;
+    padding: 1.5rem 2rem 2rem 2rem;
+    max-width: 1400px;
 }
 
-/* 侧边栏美化 */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-    color: white;
+/* ========== 侧边栏 ========== */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 40%, #0f3460 100%);
+    width: 280px !important;
 }
 
-[data-testid="stSidebar"] .stMarkdown h1,
-[data-testid="stSidebar"] .stMarkdown h2,
-[data-testid="stSidebar"] .stMarkdown h3 {
-    color: #e94560 !important;
+section[data-testid="stSidebar"] * {
+    color: #e0e0e0 !important;
 }
 
-[data-testid="stSidebar"] .stMarkdown p,
-[data-testid="stSidebar"] .stMarkdown li {
-    color: #a8a8b3 !important;
+section[data-testid="stSidebar"] .stRadio label {
+    padding: 8px 16px;
+    border-radius: 10px;
+    margin: 2px 0;
+    transition: all 0.2s ease;
+    cursor: pointer;
 }
 
-/* 功能卡片 */
+section[data-testid="stSidebar"] .stRadio label:hover {
+    background: rgba(108, 99, 255, 0.3);
+}
+
+section[data-testid="stSidebar"] .stRadio label[data-checked="true"] {
+    background: linear-gradient(135deg, #6C63FF, #a855f7) !important;
+    color: white !important;
+    font-weight: 600;
+}
+
+/* ========== 卡片效果 ========== */
 div[data-testid="stExpander"] {
-    border: 1px solid #e0e0e0;
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    margin-bottom: 0.8rem;
+    border: 1px solid #e8e8f0;
+    border-radius: 16px;
+    background: white;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: all 0.25s ease;
 }
 
 div[data-testid="stExpander"]:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-    border-color: #667eea;
+    box-shadow: 0 8px 25px rgba(108, 99, 255, 0.12);
+    border-color: #6C63FF;
+    transform: translateY(-1px);
 }
 
-/* 按钮美化 */
-.stButton > button {
-    border-radius: 8px;
+div[data-testid="stExpander"] summary {
     font-weight: 600;
-    transition: all 0.3s ease;
+    font-size: 0.95rem;
 }
 
-.stButton > button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+/* ========== 按钮 ========== */
+.stButton > button {
+    border-radius: 12px;
+    font-weight: 600;
+    padding: 0.5rem 1.5rem;
+    transition: all 0.25s ease;
+    border: none;
+    letter-spacing: 0.3px;
 }
 
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border: none;
+    background: linear-gradient(135deg, #6C63FF 0%, #a855f7 100%);
+    color: white;
+    box-shadow: 0 4px 15px rgba(108, 99, 255, 0.35);
 }
 
-/* 成功/警告消息 */
-.stSuccess {
-    border-radius: 8px;
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(108, 99, 255, 0.5);
 }
 
-.stAlert {
-    border-radius: 8px;
+.stButton > button[kind="secondary"] {
+    background: #f0f2f6;
+    color: #4a4a5a;
 }
 
-/* 数据表格 */
-[data-testid="stDataFrame"] {
-    border-radius: 12px;
+.stButton > button[kind="secondary"]:hover {
+    background: #e2e5eb;
+}
+
+/* ========== 指标卡片 ========== */
+div[data-testid="stMetric"] {
+    background: white;
+    border: 1px solid #e8e8f0;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    transition: all 0.2s ease;
+}
+
+div[data-testid="stMetric"]:hover {
+    box-shadow: 0 4px 16px rgba(108, 99, 255, 0.1);
+    border-color: #6C63FF;
+}
+
+div[data-testid="stMetric"] label {
+    color: #8e8ea0 !important;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    font-size: 1.8rem !important;
+    font-weight: 700;
+    color: #1E1E2E;
+}
+
+/* ========== 表格美化 ========== */
+div[data-testid="stDataFrame"] {
+    border-radius: 16px;
     overflow: hidden;
+    border: 1px solid #e8e8f0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 
-/* 选择框 */
-.stSelectbox > div > div {
-    border-radius: 8px;
+/* ========== 文件上传 ========== */
+div[data-testid="stFileUploader"] {
+    border: 2px dashed #c4c4d4;
+    border-radius: 16px;
+    padding: 24px;
+    background: linear-gradient(135deg, rgba(108,99,255,0.03), rgba(168,85,247,0.03));
+    transition: all 0.3s ease;
 }
 
-/* 标签页 */
+div[data-testid="stFileUploader"]:hover {
+    border-color: #6C63FF;
+    background: linear-gradient(135deg, rgba(108,99,255,0.06), rgba(168,85,247,0.06));
+}
+
+/* ========== Tabs ========== */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
+    gap: 4px;
+    background: #f0f2f6;
+    border-radius: 12px;
+    padding: 4px;
 }
 
 .stTabs [data-baseweb="tab"] {
-    border-radius: 8px 8px 0 0;
+    border-radius: 10px;
     padding: 8px 20px;
+    font-weight: 500;
+    color: #666;
 }
 
-/* 指标卡片 */
-[data-testid="stMetric"] {
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    border-radius: 12px;
-    padding: 16px;
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    background: white;
+    color: #6C63FF;
+    font-weight: 600;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 
-/* 文件上传区域 */
-[data-testid="stFileUploader"] {
-    border: 2px dashed #667eea;
-    border-radius: 12px;
-    padding: 20px;
-    background: rgba(102, 126, 234, 0.03);
+/* ========== 选择框 ========== */
+.stSelectbox > div > div,
+.stMultiSelect > div > div,
+.stTextInput > div > div > input {
+    border-radius: 10px !important;
+    border-color: #e0e0e8 !important;
 }
 
-/* 分隔线 */
+.stSelectbox > div > div:focus-within,
+.stMultiSelect > div > div:focus-within,
+.stTextInput > div > div > input:focus {
+    border-color: #6C63FF !important;
+    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.1) !important;
+}
+
+/* ========== 成功/错误/信息提示 ========== */
+div[data-testid="stAlert"] {
+    border-radius: 12px;
+    border: none;
+}
+
+/* ========== 分隔线 ========== */
 hr {
     border: none;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #667eea, transparent);
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #d0d0e0, transparent);
     margin: 1.5rem 0;
+}
+
+/* ========== 下载按钮特殊样式 ========== */
+.stDownloadButton > button {
+    background: linear-gradient(135deg, #10b981, #059669) !important;
+    color: white !important;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    padding: 12px 24px;
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+}
+
+.stDownloadButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+}
+
+/* ========== 进度条 ========== */
+.stProgress > div > div {
+    background: linear-gradient(135deg, #6C63FF, #a855f7);
+    border-radius: 10px;
+}
+
+/* ========== 欢迎页动画 ========== */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.welcome-card {
+    animation: fadeInUp 0.6s ease-out;
+}
+
+.feature-card {
+    background: white;
+    border: 1px solid #e8e8f0;
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    transition: all 0.3s ease;
+    height: 100%;
+}
+
+.feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px rgba(108, 99, 255, 0.15);
+    border-color: #6C63FF;
+}
+
+.feature-icon {
+    font-size: 2.5rem;
+    margin-bottom: 12px;
+}
+
+.feature-title {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #1E1E2E;
+    margin-bottom: 8px;
+}
+
+.feature-desc {
+    color: #8e8ea0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.gradient-text {
+    background: linear-gradient(135deg, #6C63FF, #a855f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 800;
 }
