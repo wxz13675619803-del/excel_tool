@@ -1222,17 +1222,24 @@ elif menu == "🧮 公式引擎":
         
         # ============ 两列运算 ============
         elif scene in ["📊 两列相加", "📊 两列相减", "📊 两列相乘", "📊 两列相除"]:
-            op_map = {"相加": ("+", lambda a,b: a+b), "相减": ("-", lambda a,b: a-b),
-                      "相乘": ("×", lambda a,b: a*b), "相除": ("÷", lambda a,b: a/b.replace(0,np.nan))}
+            op_map = {
+                "相加": ("+", lambda a, b: a + b),
+                "相减": ("-", lambda a, b: a - b),
+                "相乘": ("×", lambda a, b: a * b),
+                "相除": ("÷", lambda a, b: a / b.replace(0, np.nan)),
+            }
             op_key = [k for k in op_map if k in scene][0]
             symbol, func = op_map[op_key]
             
+            # 使用 op_key（中文）作为唯一key前缀，避免符号冲突
             c1, c2 = st.columns(2)
-            with c1: col_a = st.selectbox("📌 列A", numeric_cols, key=f"q6_{symbol}_a")
-            with c2: col_b = st.selectbox("📌 列B", numeric_cols, key=f"q6_{symbol}_b")
-            new_name = st.text_input("✏️ 新列名", value=f"{col_a}{symbol}{col_b}", key=f"q6_{symbol}_n")
+            with c1: 
+                col_a = st.selectbox("📌 列A", numeric_cols, key=f"q6_{op_key}_colA")
+            with c2: 
+                col_b = st.selectbox("📌 列B", numeric_cols, key=f"q6_{op_key}_colB")
+            new_name = st.text_input("✏️ 新列名", value=f"{col_a}{symbol}{col_b}", key=f"q6_{op_key}_name")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} {symbol} {col_b}</b></div>', unsafe_allow_html=True)
-            if st.button("✅ 立即生成", key=f"q6_{symbol}_b", type="primary", use_container_width=True):
+            if st.button("✅ 立即生成", key=f"q6_{op_key}_btn", type="primary", use_container_width=True):
                 save_snapshot()
                 df[new_name] = func(df[col_a], df[col_b]).round(4)
                 st.session_state.df = df
@@ -1264,18 +1271,30 @@ elif menu == "🧮 公式引擎":
         # ============ 列与固定数字运算 ============
         elif scene in ["🔢 某列 × 固定数字", "🔢 某列 ÷ 固定数字", 
                        "🔢 某列 + 固定数字", "🔢 某列 - 固定数字"]:
-            op_map2 = {"×": (lambda a,n: a*n), "÷": (lambda a,n: a/n if n!=0 else np.nan),
-                       "+": (lambda a,n: a+n), "-": (lambda a,n: a-n)}
-            symbol = [s for s in op_map2 if s in scene][0]
+            op_map2 = {
+                "乘": ("×", lambda a, n: a * n),
+                "除": ("÷", lambda a, n: a / n if n != 0 else np.nan),
+                "加": ("+", lambda a, n: a + n),
+                "减": ("-", lambda a, n: a - n),
+            }
+            # 用中文动词作为唯一key
+            op_key2 = None
+            for k in op_map2:
+                if k in scene:
+                    op_key2 = k
+                    break
+            symbol, func2 = op_map2[op_key2]
             
             c1, c2 = st.columns(2)
-            with c1: col = st.selectbox("📌 选择列", numeric_cols, key=f"q9_{symbol}_c")
-            with c2: num = st.number_input("🔢 输入数字", value=1.0, key=f"q9_{symbol}_n")
-            new_name = st.text_input("✏️ 新列名", value=f"{col}{symbol}{num}", key=f"q9_{symbol}_nm")
+            with c1: 
+                col = st.selectbox("📌 选择列", numeric_cols, key=f"q9_{op_key2}_col")
+            with c2: 
+                num = st.number_input("🔢 输入数字", value=1.0, key=f"q9_{op_key2}_num")
+            new_name = st.text_input("✏️ 新列名", value=f"{col}{symbol}{num}", key=f"q9_{op_key2}_name")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} {symbol} {num}</b></div>', unsafe_allow_html=True)
-            if st.button("✅ 立即生成", key=f"q9_{symbol}_b", type="primary", use_container_width=True):
+            if st.button("✅ 立即生成", key=f"q9_{op_key2}_btn", type="primary", use_container_width=True):
                 save_snapshot()
-                df[new_name] = op_map2[symbol](df[col], num).round(4)
+                df[new_name] = func2(df[col], num).round(4)
                 st.session_state.df = df
                 st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
         
