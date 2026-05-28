@@ -6,3 +6,5 @@ numpy
 simpleeval
 pyinstaller
 streamlit-option-menu
+plotly
+openai
