@@ -16,6 +16,10 @@ from utils.helpers import (
     load_excel_cached, optimize_dtypes, df_to_excel_optimized,
     get_col_types, generate_filename
 )
+from utils.ai_helper import (
+    ai_insight, ai_chat_to_code, ai_explain_result,
+    safe_exec_pandas_code, get_ai_client
+)
 
 # ======================== 页面配置 ========================
 st.set_page_config(
@@ -36,7 +40,12 @@ defaults = {
     'current_sheet': None,
     'history': [], 'redo_stack': [], 'op_log': [],
     'last_file_hash': None,
-    'new_cols': [],  # 记录新生成的列（用于高亮）
+    'new_cols': [],
+    # 新增
+    'ai_insight_cache': {},      # AI洞察缓存
+    'ai_chat_history': [],        # AI对话历史
+    'recipe': [],                 # 操作录制
+    'recording': False,           # 是否正在录制
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -189,11 +198,17 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # menu = st.radio(
+    #     "nav",
+    #     ["🏠 数据", "🧹 清洗", "🧮 计算", "📝 文本",
+    #      "📅 日期", "🔎 查找", "📊 汇总", "📜 历史"],
+    #     label_visibility="collapsed"
+    # )
     menu = st.radio(
-        "nav",
-        ["🏠 数据", "🧹 清洗", "🧮 计算", "📝 文本",
-         "📅 日期", "🔎 查找", "📊 汇总", "📜 历史"],
-        label_visibility="collapsed"
+    "nav",
+    ["🤖 AI 助手", "🏠 数据", "🧹 清洗", "🧮 计算", "📝 文本",
+     "📅 日期", "🔎 查找", "📊 汇总", "📈 图表", "📜 历史"],
+    label_visibility="collapsed"
     )
     st.session_state['menu_key'] = menu
     
@@ -240,6 +255,344 @@ df = st.session_state.df
 numeric_cols = safe_numeric_cols(df)
 text_cols = safe_text_cols(df)
 all_cols = df.columns.tolist()
+
+
+
+# ================================================================
+#                        🤖 AI 助手（核心新功能）
+# ================================================================
+if menu == "🤖 AI 助手":
+    st.subheader("🤖 AI 智能助手")
+    
+    client, _ = get_ai_client()
+    if not client:
+        st.warning("""
+        ⚠️ **AI功能未启用**
+        
+        请在 Streamlit Cloud 的 **App Settings → Secrets** 中添加：
+        ```
+        DEEPSEEK_API_KEY = "你的密钥"
+        ```
+        
+        👉 [免费获取 DeepSeek API Key](https://platform.deepseek.com)（新用户送¥10额度）
+        """)
+        st.stop()
+    
+    ai_tab1, ai_tab2, ai_tab3 = st.tabs(["💬 对话操作", "🔮 数据洞察", "🎬 操作录制"])
+    
+    # ===== Tab 1: 对话操作 =====
+    with ai_tab1:
+        st.caption("💡 用大白话告诉 AI 您想做什么，它会自动帮您完成")
+        
+        # 示例
+        st.markdown("**🎯 试试这些（点击直接使用）：**")
+        ex_col1, ex_col2 = st.columns(2)
+        examples = [
+            "算每个销售员的总销售额，按降序排",
+            "找出销售额最高的前10条记录",
+            "把每个地区的销售额做成汇总",
+            "计算每个产品类别的平均单价",
+            "找出销售额大于平均值的记录",
+            "按月份统计销售额",
+        ]
+        for i, ex in enumerate(examples):
+            with (ex_col1 if i % 2 == 0 else ex_col2):
+                if st.button(f"💬 {ex}", key=f"ai_ex_{i}", use_container_width=True):
+                    st.session_state['ai_query_input'] = ex
+        
+        st.markdown("---")
+        
+        # 输入框
+        user_query = st.text_area(
+            "🗣️ 告诉 AI 您想做什么",
+            value=st.session_state.get('ai_query_input', ''),
+            height=80,
+            placeholder="例如：算每个销售员的销售额总和，并按降序排列",
+            key="ai_query_text"
+        )
+        
+        col_btn1, col_btn2 = st.columns([1, 4])
+        with col_btn1:
+            run_ai = st.button("🚀 让 AI 执行", type="primary", use_container_width=True)
+        with col_btn2:
+            if st.button("🗑️ 清空对话历史", use_container_width=True):
+                st.session_state.ai_chat_history = []
+                st.rerun()
+        
+        if run_ai and user_query:
+            with st.spinner("🤖 AI 思考中..."):
+                ai_result = ai_chat_to_code(user_query, df)
+            
+            if "error" in ai_result:
+                st.error(f"❌ {ai_result['error']}")
+            else:
+                # 显示AI的理解
+                st.markdown(f"""
+                <div style="background:rgba(108,99,255,0.08); border-left:4px solid #6C63FF;
+                            padding:14px; border-radius:8px; margin:10px 0;">
+                    🤖 <b>AI 理解：</b>{ai_result.get('explanation', '')}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 显示代码（折叠）
+                with st.expander("👀 查看 AI 生成的代码"):
+                    st.code(ai_result.get('code', ''), language='python')
+                
+                # 执行代码
+                code = ai_result.get('code', '')
+                result_type = ai_result.get('result_type', 'modify_df')
+                
+                if code:
+                    new_df, result, error = safe_exec_pandas_code(code, df)
+                    
+                    if error:
+                        st.error(error)
+                        st.info("💡 试着换个说法，或者用更具体的列名")
+                    else:
+                        if result_type == "new_table" and result is not None:
+                            st.success("✅ 已生成结果表：")
+                            st.dataframe(result, use_container_width=True, height=350)
+                            
+                            # 提供下载
+                            csv = result.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button("⬇️ 下载结果", csv,
+                                              file_name=f"AI结果_{datetime.now().strftime('%H%M%S')}.csv",
+                                              mime="text/csv")
+                            
+                            # 保存到 session 供导出
+                            st.session_state['ai_result_table'] = result
+                            
+                            # 添加到聊天历史
+                            st.session_state.ai_chat_history.append({
+                                "query": user_query,
+                                "explanation": ai_result.get('explanation', ''),
+                                "result_shape": f"{len(result)}行 × {len(result.columns)}列"
+                            })
+                        
+                        elif new_df is not None and not new_df.equals(df):
+                            save_snapshot(f"AI: {user_query[:30]}")
+                            # 标记新列
+                            new_cols_set = set(new_df.columns) - set(df.columns)
+                            for nc in new_cols_set:
+                                mark_new_col(nc)
+                            st.session_state.df = new_df
+                            st.success("✅ 已应用到主数据")
+                            st.toast("✅ 操作完成！查看下方数据预览")
+                            st.balloons()
+                            st.rerun()
+                        else:
+                            st.info("ℹ️ AI 执行完成，但数据无变化")
+        
+        # 显示对话历史
+        if st.session_state.ai_chat_history:
+            st.markdown("---")
+            st.markdown("##### 📜 对话历史")
+            for i, chat in enumerate(reversed(st.session_state.ai_chat_history[-5:])):
+                st.markdown(f"""
+                <div style="background:rgba(128,128,128,0.05); padding:10px 14px;
+                            border-radius:8px; margin:6px 0; font-size:0.9rem;">
+                    <b>🙋 您：</b> {chat['query']}<br>
+                    <b>🤖 AI：</b> {chat['explanation']}<br>
+                    <small style="color:#94a3b8;">结果：{chat.get('result_shape', '已应用')}</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # ===== Tab 2: 数据洞察 =====
+    with ai_tab2:
+        st.caption("🔮 让 AI 自动分析您的数据，发现亮点和问题")
+        
+        # 缓存机制：同一份数据只调用一次AI
+        cache_key = f"{len(df)}_{len(df.columns)}_{','.join(df.columns[:5])}"
+        
+        if st.button("🚀 生成 AI 洞察报告", type="primary"):
+            with st.spinner("🤖 AI 正在分析您的数据（约10秒）..."):
+                insight = ai_insight(df)
+                st.session_state.ai_insight_cache[cache_key] = insight
+        
+        if cache_key in st.session_state.ai_insight_cache:
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg, rgba(108,99,255,0.05), rgba(168,85,247,0.05));
+                        border:1px solid rgba(108,99,255,0.2); border-radius:14px;
+                        padding:24px; margin:14px 0; line-height:1.8;">
+                {st.session_state.ai_insight_cache[cache_key].replace(chr(10), '<br>')}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("🔄 重新分析"):
+                del st.session_state.ai_insight_cache[cache_key]
+                st.rerun()
+        else:
+            st.info("👆 点击上方按钮，AI 会用 10 秒分析您的数据，告诉您：\n"
+                   "- 数据是什么内容\n"
+                   "- 有什么关键发现\n"
+                   "- 推荐做哪些操作\n"
+                   "- 数据质量问题")
+    
+    # ===== Tab 3: 操作录制 =====
+    with ai_tab3:
+        st.caption("🎬 录制您的操作，保存为「配方」，下次相同数据一键应用")
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if not st.session_state.recording:
+                if st.button("🔴 开始录制", type="primary", use_container_width=True):
+                    st.session_state.recording = True
+                    st.session_state.recipe = []
+                    st.toast("🔴 录制中... 现在去操作数据吧")
+                    st.rerun()
+            else:
+                if st.button("⏹️ 停止录制", type="primary", use_container_width=True):
+                    st.session_state.recording = False
+                    st.toast(f"✅ 录制完成，共 {len(st.session_state.recipe)} 步")
+                    st.rerun()
+        
+        with c2:
+            if st.session_state.recipe and st.button("💾 保存配方", use_container_width=True):
+                recipe_json = json.dumps(st.session_state.recipe, ensure_ascii=False, indent=2)
+                st.download_button("⬇️ 下载配方文件",
+                                  recipe_json.encode('utf-8'),
+                                  file_name=f"操作配方_{datetime.now().strftime('%Y%m%d')}.json",
+                                  mime="application/json")
+        
+        with c3:
+            uploaded_recipe = st.file_uploader("📂 载入配方", type=["json"], 
+                                              label_visibility="collapsed")
+            if uploaded_recipe:
+                try:
+                    loaded = json.loads(uploaded_recipe.read().decode('utf-8'))
+                    st.session_state.recipe = loaded
+                    st.toast(f"✅ 已载入 {len(loaded)} 步操作")
+                except Exception as e:
+                    st.error(f"载入失败: {e}")
+        
+        if st.session_state.recording:
+            st.warning("🔴 正在录制中... 请在其他页面进行操作，操作会自动记录")
+        
+        if st.session_state.recipe:
+            st.markdown(f"##### 📋 当前配方（{len(st.session_state.recipe)} 步）")
+            for i, step in enumerate(st.session_state.recipe):
+                st.markdown(f"""
+                <div style="background:rgba(108,99,255,0.05); border-left:3px solid #6C63FF;
+                            padding:8px 14px; margin:4px 0; border-radius:6px;">
+                    <small style="color:#a78bfa;">步骤 {i+1}</small><br>
+                    {step.get('desc', '未知操作')}
+                </div>
+                """, unsafe_allow_html=True)
+
+
+# ================================================================
+#                        📈 图表（新功能）
+# ================================================================
+elif menu == "📈 图表":
+    st.subheader("📈 智能图表")
+    
+    import plotly.express as px
+    
+    chart_type = st.radio(
+        "类型",
+        ["📊 柱状图", "📈 折线图", "🥧 饼图", "🔵 散点图", "📦 箱线图", "🌡️ 热力图"],
+        horizontal=True, label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    try:
+        if chart_type == "📊 柱状图":
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                x_col = st.selectbox("X 轴（分类）", all_cols, key="bar_x")
+            with c2:
+                y_col = st.selectbox("Y 轴（数值）", numeric_cols, key="bar_y")
+            with c3:
+                color_col = st.selectbox("颜色（可选）", ["无"] + all_cols, key="bar_c")
+            
+            agg = st.selectbox("汇总方式", ["求和", "平均", "计数", "最大", "最小"], key="bar_a")
+            agg_func = {"求和": "sum", "平均": "mean", "计数": "count", "最大": "max", "最小": "min"}[agg]
+            
+            # 自动汇总
+            if color_col != "无":
+                plot_df = df.groupby([x_col, color_col])[y_col].agg(agg_func).reset_index()
+                fig = px.bar(plot_df, x=x_col, y=y_col, color=color_col, barmode='group',
+                            title=f"{x_col} 的 {y_col}（{agg}）")
+            else:
+                plot_df = df.groupby(x_col)[y_col].agg(agg_func).reset_index().sort_values(y_col, ascending=False)
+                fig = px.bar(plot_df, x=x_col, y=y_col, title=f"{x_col} 的 {y_col}（{agg}）",
+                            color=y_col, color_continuous_scale='Purples')
+            
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        elif chart_type == "📈 折线图":
+            c1, c2 = st.columns(2)
+            with c1:
+                x_col = st.selectbox("X 轴", all_cols, key="line_x")
+            with c2:
+                y_cols = st.multiselect("Y 轴（可多选）", numeric_cols, default=numeric_cols[:1], key="line_y")
+            
+            if y_cols:
+                plot_df = df.sort_values(x_col)
+                fig = px.line(plot_df, x=x_col, y=y_cols, title=f"{x_col} 趋势",
+                             markers=True)
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
+        
+        elif chart_type == "🥧 饼图":
+            c1, c2 = st.columns(2)
+            with c1:
+                name_col = st.selectbox("分类列", all_cols, key="pie_n")
+            with c2:
+                val_col = st.selectbox("数值列", numeric_cols, key="pie_v")
+            
+            plot_df = df.groupby(name_col)[val_col].sum().reset_index()
+            fig = px.pie(plot_df, names=name_col, values=val_col, title=f"{name_col} 占比",
+                        color_discrete_sequence=px.colors.sequential.Purples_r)
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        elif chart_type == "🔵 散点图":
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                x_col = st.selectbox("X", numeric_cols, key="sc_x")
+            with c2:
+                y_col = st.selectbox("Y", numeric_cols, key="sc_y", 
+                                    index=1 if len(numeric_cols) > 1 else 0)
+            with c3:
+                color_col = st.selectbox("颜色", ["无"] + all_cols, key="sc_c")
+            
+            color = None if color_col == "无" else color_col
+            fig = px.scatter(df, x=x_col, y=y_col, color=color,
+                           title=f"{x_col} vs {y_col}", trendline="ols" if not color else None)
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        elif chart_type == "📦 箱线图":
+            c1, c2 = st.columns(2)
+            with c1:
+                y_col = st.selectbox("数值列", numeric_cols, key="box_y")
+            with c2:
+                x_col = st.selectbox("分类列（可选）", ["无"] + text_cols, key="box_x")
+            
+            x = None if x_col == "无" else x_col
+            fig = px.box(df, x=x, y=y_col, title=f"{y_col} 分布",
+                        color_discrete_sequence=['#6C63FF'])
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        elif chart_type == "🌡️ 热力图":
+            if len(numeric_cols) >= 2:
+                corr = df[numeric_cols].corr().round(2)
+                fig = px.imshow(corr, text_auto=True, title="数值列相关性",
+                               color_continuous_scale='Purples', aspect='auto')
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("需要至少2个数值列")
+    
+    except Exception as e:
+        st.error(friendly_error(e))
+
+
+
 
 
 # ================================================================
