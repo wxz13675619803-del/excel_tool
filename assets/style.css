@@ -404,3 +404,30 @@ hr {
     font-weight: 600;
     margin: 0 2px;
 }
+
+/* ========== AI 卡片样式 ========== */
+.ai-card {
+    background: linear-gradient(135deg, rgba(108,99,255,0.06), rgba(168,85,247,0.06));
+    border: 1px solid rgba(108,99,255,0.25);
+    border-radius: 14px;
+    padding: 18px;
+    margin: 12px 0;
+}
+
+.ai-thinking {
+    background: linear-gradient(90deg, rgba(108,99,255,0.1), rgba(168,85,247,0.1), rgba(108,99,255,0.1));
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+    border-radius: 10px;
+    padding: 12px;
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+/* AI按钮特殊样式 */
+button[kind="primary"]:has(div:contains("AI")) {
+    background: linear-gradient(135deg, #6C63FF 0%, #ec4899 100%) !important;
+}
