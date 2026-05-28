@@ -12,7 +12,7 @@ def get_ai_client():
         base_url = st.secrets.get("AI_BASE_URL", "https://api.deepseek.com/v1")
         model = st.secrets.get("AI_MODEL", "deepseek-chat")
     except:
-        api_key = ""
+        api_key = "sk-193491fb2a94465e9ff85072fe8db692"
         base_url = "https://api.deepseek.com/v1"
         model = "deepseek-chat"
     
