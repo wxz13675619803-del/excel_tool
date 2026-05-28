@@ -366,3 +366,41 @@ hr {
 .feature-icon { font-size: 2.2rem; margin-bottom: 10px; }
 .feature-title { font-weight: 700; font-size: 1.05rem; margin-bottom: 6px; }
 .feature-desc { font-size: 0.82rem; line-height: 1.6; opacity: 0.7; }
+
+/* ========== 新列高亮徽章 ========== */
+.new-col-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #6C63FF, #a855f7);
+    color: white !important;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 6px;
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(108, 99, 255, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(108, 99, 255, 0); }
+}
+
+/* ========== 公式预览框（更显眼） ========== */
+.formula-preview {
+    background: linear-gradient(135deg, rgba(16,185,129,0.08), rgba(108,99,255,0.05));
+    border-left: 4px solid #10b981;
+    padding: 14px 18px;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    margin: 12px 0;
+    line-height: 1.6;
+}
+
+.formula-preview code {
+    background: rgba(108, 99, 255, 0.15);
+    color: #6C63FF;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin: 0 2px;
+}
