@@ -1,14 +1,14 @@
 """
-📊 Excel智能处理工具 Pro v3.5 - 修复优化版
-- 修复10个已知Bug
-- 借鉴Airtable/Rows.com/Power Query设计
-- 智能列识别 + 操作历史 + 重做功能
+📊 Excel智能处理工具 Pro v4.0 - 终极整合版
+✨ 新手引导 + 全局搜索 + 自然语言公式 + 增强导出 + 操作历史
+✨ 数据健康度 + 撤销重做 + 智能列识别 + 友好错误提示
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import os
 import re
+import time
 from io import BytesIO
 from datetime import datetime
 
@@ -35,11 +35,10 @@ if os.path.exists(css_path):
 defaults = {
     'df': None, 'original_df': None, 'sheets': {},
     'current_sheet': None,
-    'history': [],          # 撤销栈
-    'redo_stack': [],       # 重做栈
-    'op_log': [],           # 操作日志（Power Query风格）
-    'page_num': 1,
-    'last_file_hash': None,
+    'history': [], 'redo_stack': [], 'op_log': [],
+    'page_num': 1, 'last_file_hash': None,
+    'nl_input': '', 'formula_input': '',
+    'show_stats': False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -48,14 +47,12 @@ for k, v in defaults.items():
 
 # ======================== 工具函数 ========================
 def save_snapshot(operation_desc=""):
-    """保存操作快照 + 记录操作日志"""
+    """保存操作快照"""
     if st.session_state.df is not None:
         st.session_state.history.append(st.session_state.df.copy())
         if len(st.session_state.history) > 30:
             st.session_state.history.pop(0)
-        # 操作发生后清空重做栈
         st.session_state.redo_stack = []
-        # 记录操作日志
         if operation_desc:
             st.session_state.op_log.append({
                 "time": datetime.now().strftime("%H:%M:%S"),
@@ -64,7 +61,6 @@ def save_snapshot(operation_desc=""):
 
 
 def undo():
-    """撤销"""
     if st.session_state.history:
         st.session_state.redo_stack.append(st.session_state.df.copy())
         st.session_state.df = st.session_state.history.pop()
@@ -74,7 +70,6 @@ def undo():
 
 
 def redo():
-    """重做"""
     if st.session_state.redo_stack:
         st.session_state.history.append(st.session_state.df.copy())
         st.session_state.df = st.session_state.redo_stack.pop()
@@ -82,7 +77,7 @@ def redo():
 
 
 def smart_detect_column(cols, keywords):
-    """智能识别列名（如自动找到"金额"列）"""
+    """智能识别列名"""
     for kw in keywords:
         for col in cols:
             if kw in str(col).lower() or kw in str(col):
@@ -90,8 +85,14 @@ def smart_detect_column(cols, keywords):
     return cols[0] if cols else None
 
 
+def col_index_safe(col, cols_list):
+    """安全获取列索引"""
+    if col and col in cols_list:
+        return cols_list.index(col)
+    return 0
+
+
 def safe_get_numeric_cols(df):
-    """安全获取数值列（每次调用都重新计算，避免缓存问题）"""
     return df.select_dtypes(include='number').columns.tolist()
 
 
@@ -100,33 +101,99 @@ def safe_get_text_cols(df):
 
 
 def calc_data_health(df):
-    """数据健康度评分（0-100）"""
     if df is None or len(df) == 0:
         return 0
-    
     total_cells = len(df) * len(df.columns)
+    if total_cells == 0:
+        return 0
     missing_pct = df.isna().sum().sum() / total_cells * 100
-    
-    # 重复行
-    dup_pct = df.duplicated().sum() / len(df) * 100
-    
-    # 评分
+    try:
+        dup_pct = df.duplicated().sum() / len(df) * 100
+    except:
+        dup_pct = 0
     score = 100 - missing_pct * 0.5 - dup_pct * 0.3
     return max(0, min(100, int(score)))
 
 
 def friendly_error(e):
-    """技术错误转人话"""
     msg = str(e)
     if "KeyError" in msg or "not in index" in msg:
         return "❌ 找不到指定的列，请检查列名是否存在"
     if "could not convert" in msg or "invalid literal" in msg:
         return "❌ 数据类型不匹配，请检查是否有非数字内容"
-    if "division by zero" in msg.lower() or "zero" in msg.lower():
+    if "division by zero" in msg.lower():
         return "❌ 除数不能为0"
     if "memory" in msg.lower():
         return "❌ 数据太大内存不足，请尝试筛选部分数据后再操作"
     return f"❌ 操作失败: {msg[:100]}"
+
+
+def generate_demo_data():
+    """生成演示数据"""
+    np.random.seed(42)
+    n = 100
+    demo = pd.DataFrame({
+        '订单号': [f'NO{20240000+i}' for i in range(1, n+1)],
+        '客户姓名': np.random.choice(['张三', '李四', '王五', '赵六', '钱七', '孙八', '周九', '吴十'], n),
+        '产品类别': np.random.choice(['电子产品', '服装', '食品', '日用品', '图书'], n),
+        '销售日期': pd.date_range('2024-01-01', periods=n, freq='D'),
+        '单价': np.round(np.random.uniform(10, 1000, n), 2),
+        '数量': np.random.randint(1, 20, n),
+        '折扣率': np.round(np.random.uniform(0.5, 1.0, n), 2),
+        '销售员': np.random.choice(['Alice', 'Bob', 'Charlie', 'David'], n),
+        '地区': np.random.choice(['华北', '华东', '华南', '西部', '东北'], n),
+    })
+    demo['销售额'] = (demo['单价'] * demo['数量'] * demo['折扣率']).round(2)
+    return demo
+
+
+def parse_natural_language(query, df):
+    """简单的自然语言解析器"""
+    query = query.strip()
+    cols = df.columns.tolist()
+    
+    mentioned_cols = [col for col in cols if col in query]
+    
+    new_name = "计算结果"
+    patterns = [
+        r'叫[做作]?[\"\'""]?([^\"\'""，。,.\s]+)',
+        r'命名为[\"\'""]?([^\"\'""，。,.\s]+)',
+        r'结果[是为][\"\'""]?([^\"\'""，。,.\s]+)',
+    ]
+    for p in patterns:
+        m = re.search(p, query)
+        if m:
+            new_name = m.group(1)
+            break
+    
+    if any(kw in query for kw in ['乘以', '×', '*']) or '乘' in query:
+        op = 'multiply'
+    elif any(kw in query for kw in ['除以', '÷', '/']) or '除' in query:
+        op = 'divide'
+    elif any(kw in query for kw in ['加上', '+', '相加', '加和']):
+        op = 'add'
+    elif any(kw in query for kw in ['减去', '-', '相减']):
+        op = 'subtract'
+    elif any(kw in query for kw in ['拼接', '拼起来', '合并', '连接']):
+        op = 'concat'
+    elif any(kw in query for kw in ['保留', '小数', '四舍五入']):
+        op = 'round'
+    elif any(kw in query for kw in ['标记', '判断', '如果', '大于', '小于']):
+        op = 'condition'
+    elif any(kw in query for kw in ['打折', '折扣', '折']):
+        op = 'discount'
+    else:
+        op = None
+    
+    numbers = re.findall(r'-?\d+\.?\d*', query)
+    
+    return {
+        'op': op,
+        'cols': mentioned_cols,
+        'new_name': new_name,
+        'numbers': [float(n) for n in numbers] if numbers else [],
+        'query': query
+    }
 
 
 # ======================== 侧边栏 ========================
@@ -135,7 +202,7 @@ with st.sidebar:
     <div style="text-align:center; padding:10px 0 20px 0;">
         <div style="font-size:2.5rem;">📊</div>
         <div style="font-size:1.1rem; font-weight:700; color:#a78bfa;">Excel 处理工具</div>
-        <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Pro v3.5 · 智能版</div>
+        <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Pro v4.0 · 终极版</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -151,7 +218,6 @@ with st.sidebar:
         file_bytes = uploaded_file.getvalue()
         file_hash = hash(file_bytes)
         
-        # 检测新文件，重置状态
         if file_hash != st.session_state.last_file_hash:
             st.session_state.last_file_hash = file_hash
             st.session_state.current_sheet = None
@@ -183,9 +249,104 @@ with st.sidebar:
             except Exception as e:
                 st.error(friendly_error(e))
     
+    # ==================== 全局功能搜索 ====================
+    if st.session_state.df is not None:
+        st.markdown("---")
+        st.markdown("##### 🔍 找功能")
+        search_query = st.text_input(
+            "search",
+            placeholder="如：求和、拼接、去重...",
+            label_visibility="collapsed",
+            key="global_search"
+        )
+        
+        if search_query:
+            feature_index = {
+                "求和": "➕ 数学运算 → 基础运算 → 多列求和",
+                "总和": "➕ 数学运算 → 基础运算 → 多列求和",
+                "合计": "➕ 数学运算 → 基础运算 → 多列求和",
+                "平均": "➕ 数学运算 → 基础运算 → 多列平均值",
+                "最大": "➕ 数学运算 → 基础运算 → 最大/最小值",
+                "最小": "➕ 数学运算 → 基础运算 → 最大/最小值",
+                "排名": "➕ 数学运算 → 行列统计 → 排名",
+                "占比": "➕ 数学运算 → 行列统计 → 占比",
+                "百分比": "➕ 数学运算 → 行列统计 → 占比",
+                "增长率": "➕ 数学运算 → 行列统计 → 增长率",
+                "四舍五入": "➕ 数学运算 → 高级运算 → 四舍五入",
+                "大写": "➕ 数学运算 → 数值转换 → 金额大写",
+                "金额大写": "➕ 数学运算 → 数值转换 → 金额大写",
+                "万元": "➕ 数学运算 → 数值转换 → 单位换算",
+                "拼接": "📝 文本处理 → 拼接截取 → 文本拼接",
+                "合并文本": "📝 文本处理 → 拼接截取 → 文本拼接",
+                "截取": "📝 文本处理 → 拼接截取 → 截取文本",
+                "替换": "📝 文本处理 → 替换清理 → 查找替换",
+                "去空格": "📝 文本处理 → 替换清理 → 去除空格",
+                "大小写": "📝 文本处理 → 替换清理 → 大小写转换",
+                "提取": "📝 文本处理 → 提取转换 → 正则提取",
+                "手机号": "📝 文本处理 → 提取转换 → 提取手机号",
+                "邮箱": "📝 文本处理 → 提取转换 → 提取邮箱",
+                "身份证": "📝 文本处理 → 提取转换 → 提取身份证号",
+                "分列": "📝 文本处理 → 分列编码 → 文本分列",
+                "编号": "📝 文本处理 → 分列编码 → 生成行编号",
+                "日期": "📅 日期处理",
+                "年份": "📅 日期处理 → 提取年/月/日",
+                "月份": "📅 日期处理 → 提取年/月/日",
+                "星期": "📅 日期处理 → 提取年/月/日",
+                "日期差": "📅 日期处理 → 日期差",
+                "判断": "🔎 条件与查找 → IF条件判断",
+                "条件": "🔎 条件与查找 → IF条件判断",
+                "if": "🔎 条件与查找 → IF条件判断",
+                "vlookup": "🔎 条件与查找 → VLOOKUP查找",
+                "查找": "🔎 条件与查找 → VLOOKUP查找",
+                "匹配": "🔎 条件与查找 → VLOOKUP查找",
+                "重复": "🔎 条件与查找 → 去重与计数",
+                "去重": "🔎 条件与查找 → 去重与计数",
+                "计数": "🔎 条件与查找 → 去重与计数",
+                "透视": "📊 统计汇总 → 分组汇总",
+                "分组": "📊 统计汇总 → 分组汇总",
+                "汇总": "📊 统计汇总 → 分组汇总",
+                "sumif": "📊 统计汇总 → 条件汇总SUMIF",
+                "统计": "📊 统计汇总 → 描述统计",
+                "分箱": "📊 统计汇总 → 数值分箱",
+                "缺失": "🧹 数据清洗 → 缺失值处理",
+                "空值": "🧹 数据清洗 → 缺失值处理",
+                "填充": "🧹 数据清洗 → 缺失值处理",
+                "类型": "🧹 数据清洗 → 类型转换",
+                "删除列": "🧹 数据清洗 → 列管理 → 删除列",
+                "重命名": "🧹 数据清洗 → 列管理 → 重命名",
+                "排序": "🧹 数据清洗 → 排序筛选 → 排序",
+                "筛选": "🧹 数据清洗 → 排序筛选 → 筛选",
+                "异常": "🧹 数据清洗 → 异常值处理",
+                "公式": "🧮 公式引擎",
+                "含税": "🧮 公式引擎 → 快捷公式 → 含税金额",
+                "税额": "🧮 公式引擎 → 快捷公式 → 税额",
+                "利润": "🧮 公式引擎 → 快捷公式 → 利润",
+                "折扣": "🧮 公式引擎 → 快捷公式 → 折扣价",
+                "提成": "🧮 公式引擎 → 常用模板 → 销售提成",
+            }
+            
+            matches = []
+            q_lower = search_query.lower()
+            for keyword, hint in feature_index.items():
+                if q_lower in keyword.lower():
+                    matches.append((keyword, hint))
+            
+            if matches:
+                st.markdown(f"<small style='color:#a78bfa;'>找到 {len(matches)} 个：</small>", unsafe_allow_html=True)
+                for kw, hint in matches[:5]:
+                    st.markdown(f"""
+                    <div class="search-result">
+                        📍 <b>{kw}</b><br>
+                        <span style="color:#94a3b8; font-size:0.72rem;">{hint}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.caption("😕 没找到，试试别的关键词")
+    
+    # ==================== 数据概况 ====================
     if st.session_state.df is not None:
         df_sb = st.session_state.df
-        col_types = get_col_types(df_sb)
+        col_types_sb = get_col_types(df_sb)
         
         st.markdown("---")
         st.markdown("##### 📋 数据概况")
@@ -196,13 +357,15 @@ with st.sidebar:
         with c2:
             st.metric("列", f"{len(df_sb.columns)}")
         
-        # 数据健康度评分
         health = calc_data_health(df_sb)
         health_color = "🟢" if health >= 80 else "🟡" if health >= 60 else "🔴"
         st.caption(f"{health_color} 数据健康度: **{health}/100**")
         
-        mem_mb = df_sb.memory_usage(deep=True).sum() / 1024**2
-        st.caption(f"💾 内存: {mem_mb:.1f}MB | 🔢 数值列: {len(col_types['numeric'])} | 📝 文本列: {len(col_types['text'])}")
+        try:
+            mem_mb = df_sb.memory_usage(deep=True).sum() / 1024**2
+            st.caption(f"💾 内存: {mem_mb:.1f}MB | 🔢 数值列: {len(col_types_sb['numeric'])} | 📝 文本列: {len(col_types_sb['text'])}")
+        except:
+            pass
         
         missing = df_sb.isna().sum().sum()
         if missing > 0:
@@ -210,6 +373,7 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # ==================== 功能菜单 ====================
     st.markdown("##### 🧭 功能菜单")
     menu = st.radio(
         "nav",
@@ -221,16 +385,16 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 撤销/重做
+    # ==================== 撤销/重做 ====================
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("↩️ 撤销", use_container_width=True, 
-                     disabled=len(st.session_state.history)==0,
+        if st.button("↩️ 撤销", use_container_width=True,
+                     disabled=len(st.session_state.history) == 0,
                      help=f"已记录 {len(st.session_state.history)} 步"):
             undo()
     with c2:
         if st.button("↪️ 重做", use_container_width=True,
-                     disabled=len(st.session_state.redo_stack)==0,
+                     disabled=len(st.session_state.redo_stack) == 0,
                      help=f"可重做 {len(st.session_state.redo_stack)} 步"):
             redo()
     
@@ -241,45 +405,132 @@ with st.sidebar:
             st.session_state.redo_stack = []
             st.session_state.op_log = []
             st.rerun()
+    
+    # 自动保存指示
+    if st.session_state.df is not None and len(st.session_state.history) > 0:
+        st.markdown(f"""
+        <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3);
+                    border-radius:8px; padding:8px 12px; font-size:0.75rem; margin-top:10px;">
+            🛡️ <b style="color:#10b981;">已自动备份 {len(st.session_state.history)} 次</b><br>
+            <span style="color:#94a3b8;">放心操作，随时可撤销</span>
+        </div>
+        """, unsafe_allow_html=True)
 
 
-# ======================== 欢迎页 ========================
+# ======================== 欢迎页（新手引导版）========================
 if st.session_state.df is None:
     st.markdown("""
-    <div class="welcome-card" style="text-align:center; padding:40px 0;">
-        <h1 style="font-size:2.8rem; margin-bottom:8px;">
-            <span class="gradient-text">Excel 智能处理工具</span>
+    <div class="welcome-card" style="text-align:center; padding:30px 0;">
+        <h1 style="font-size:3rem; margin-bottom:8px;">
+            <span class="gradient-text">📊 Excel 智能助手</span>
         </h1>
-        <p style="font-size:1.15rem; color:#8e8ea0; max-width:600px; margin:0 auto 30px auto;">
-            告别手写函数，30+ 常用功能点点即用<br>
-            智能识别列名，小白也能轻松上手
+        <p style="font-size:1.25rem; color:#8e8ea0; margin:15px 0;">
+            不会函数？不懂公式？没关系！<br>
+            <b style="color:#6C63FF;">用人话告诉它，它就帮你做</b>
         </p>
     </div>
     """, unsafe_allow_html=True)
     
-    features = [
-        ("🎯", "智能识别", "自动识别金额/日期/姓名等<br>预填到对应位置"),
-        ("⚡", "极速处理", "支持50万行大数据<br>分页加载不卡顿"),
-        ("🔄", "撤销重做", "30步操作历史<br>随时回退"),
-        ("📚", "30+ 功能", "求和/拼接/VLOOKUP<br>覆盖90%场景"),
-        ("🧮", "智能公式", "点选式公式生成器<br>无需写代码"),
-        ("📊", "数据质量", "健康度评分<br>异常值自动检测"),
-    ]
+    st.markdown("### 🎯 三步就能上手")
     
-    cols = st.columns(3)
-    for i, (icon, title, desc) in enumerate(features):
-        with cols[i % 3]:
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        st.markdown("""
+        <div class="feature-card" style="text-align:left;">
+            <div style="font-size:3rem; text-align:center;">1️⃣</div>
+            <div class="feature-title" style="text-align:center;">上传文件</div>
+            <div class="feature-desc">
+                点击左侧 <b>📁 上传数据文件</b><br>
+                支持 Excel / CSV 格式<br>
+                最大 500MB
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with sc2:
+        st.markdown("""
+        <div class="feature-card" style="text-align:left;">
+            <div style="font-size:3rem; text-align:center;">2️⃣</div>
+            <div class="feature-title" style="text-align:center;">选择想做什么</div>
+            <div class="feature-desc">
+                想 <b>算总和</b>？点击 ➕<br>
+                想 <b>拼接文本</b>？点击 📝<br>
+                想 <b>找重复</b>？点击 🔎
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with sc3:
+        st.markdown("""
+        <div class="feature-card" style="text-align:left;">
+            <div style="font-size:3rem; text-align:center;">3️⃣</div>
+            <div class="feature-title" style="text-align:center;">下载结果</div>
+            <div class="feature-desc">
+                点击底部 <b>💾 导出数据</b><br>
+                可选导出 <b>全部</b>或<b>部分</b><br>
+                自动保存为 Excel
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    demo_col1, demo_col2 = st.columns([1, 1])
+    
+    with demo_col1:
+        st.markdown("### 🎬 没有数据？试试演示数据")
+        st.caption("我们准备了一份销售数据，让您快速体验")
+        if st.button("🚀 加载演示数据（销售记录）", type="primary", use_container_width=True):
+            with st.spinner("正在生成演示数据..."):
+                time.sleep(0.5)
+                demo_data = generate_demo_data()
+                st.session_state.df = demo_data
+                st.session_state.original_df = demo_data.copy()
+                st.session_state.sheets = {"演示数据": demo_data}
+                st.session_state.current_sheet = "演示数据"
+                st.session_state.history = []
+                st.session_state.redo_stack = []
+                st.session_state.op_log = []
+            st.success("✅ 演示数据已加载，开始探索吧！")
+            st.balloons()
+            time.sleep(0.5)
+            st.rerun()
+    
+    with demo_col2:
+        st.markdown("### 💡 我能做什么？")
+        st.markdown("""
+        - ✅ **求和、平均值、最大值** — 一键完成
+        - ✅ **拼接姓名 + 部门** — 点选两列即可
+        - ✅ **提取手机号 / 邮箱** — 自动识别
+        - ✅ **VLOOKUP 跨表查找** — 上传两个表即可
+        - ✅ **删除重复数据** — 一秒完成
+        - ✅ **数据透视表** — 选分组列就行
+        - ✅ **30+ 业务公式** — 销售/财务/HR 都有
+        """)
+    
+    st.markdown("---")
+    
+    st.markdown("### 👥 谁在用这个工具？")
+    
+    user_cols = st.columns(4)
+    user_scenes = [
+        ("💼", "销售经理", "算销售提成<br>统计客单价<br>分析增长率"),
+        ("💰", "财务人员", "计算含税金额<br>生成大写金额<br>对账核对"),
+        ("👤", "HR人员", "计算工资<br>统计考勤<br>员工信息处理"),
+        ("📊", "数据小白", "拼接数据<br>清洗格式<br>合并表格"),
+    ]
+    for col, (icon, role, desc) in zip(user_cols, user_scenes):
+        with col:
             st.markdown(f"""
-            <div class="feature-card">
-                <div class="feature-icon">{icon}</div>
-                <div class="feature-title">{title}</div>
+            <div class="feature-card" style="min-height:140px;">
+                <div style="font-size:2.5rem;">{icon}</div>
+                <div class="feature-title">{role}</div>
                 <div class="feature-desc">{desc}</div>
             </div>
             """, unsafe_allow_html=True)
-            st.markdown("")
     
     st.markdown("---")
-    st.info("👈 请在左侧上传 Excel / CSV 文件开始使用")
+    st.info("👈 **现在请在左侧上传文件，或点击上方「加载演示数据」开始体验**")
     st.stop()
 
 
@@ -302,43 +553,44 @@ with m5:
 
 st.markdown("---")
 
-# 每个菜单都重新计算列类型（修复Bug 9）
 numeric_cols = safe_get_numeric_cols(df)
 text_cols = safe_get_text_cols(df)
 all_cols = df.columns.tolist()
 
 
 # ================================================================
-#                        🏠 数据总览（修复Bug 1, 8）
+#                        🏠 数据总览
 # ================================================================
 if menu == "🏠 数据总览":
     st.subheader("🏠 数据总览与编辑")
     
-    # 快捷操作栏（借鉴Airtable）
     st.markdown("##### ⚡ 快捷操作")
     qc1, qc2, qc3, qc4, qc5 = st.columns(5)
     with qc1:
         if st.button("🗑️ 删除空行", use_container_width=True):
-            save_snapshot("删除所有空行")
-            before = len(df)
-            df = df.dropna(how='all').reset_index(drop=True)
-            st.session_state.df = df
+            with st.spinner("处理中..."):
+                save_snapshot("删除所有空行")
+                before = len(df)
+                df = df.dropna(how='all').reset_index(drop=True)
+                st.session_state.df = df
             st.success(f"✅ 删除 {before - len(df)} 行")
             st.rerun()
     with qc2:
         if st.button("🔁 去重所有行", use_container_width=True):
-            save_snapshot("去除完全重复的行")
-            before = len(df)
-            df = df.drop_duplicates().reset_index(drop=True)
-            st.session_state.df = df
+            with st.spinner("处理中..."):
+                save_snapshot("去除完全重复的行")
+                before = len(df)
+                df = df.drop_duplicates().reset_index(drop=True)
+                st.session_state.df = df
             st.success(f"✅ 删除 {before - len(df)} 条重复")
             st.rerun()
     with qc3:
         if st.button("✂️ 修剪空格", use_container_width=True):
-            save_snapshot("修剪所有文本列首尾空格")
-            for c in text_cols:
-                df[c] = df[c].astype(str).str.strip()
-            st.session_state.df = df
+            with st.spinner("处理中..."):
+                save_snapshot("修剪所有文本列首尾空格")
+                for c in text_cols:
+                    df[c] = df[c].astype(str).str.strip()
+                st.session_state.df = df
             st.success("✅ 已清理")
             st.rerun()
     with qc4:
@@ -350,14 +602,13 @@ if menu == "🏠 数据总览":
             st.rerun()
     with qc5:
         if st.button("📊 显示统计", use_container_width=True):
-            st.session_state['show_stats'] = not st.session_state.get('show_stats', False)
+            st.session_state.show_stats = not st.session_state.show_stats
     
-    if st.session_state.get('show_stats', False) and numeric_cols:
+    if st.session_state.show_stats and numeric_cols:
         st.dataframe(df[numeric_cols].describe().round(2), use_container_width=True)
     
     st.markdown("---")
     
-    # 分页控制
     total_rows = len(df)
     c1, c2 = st.columns([1, 4])
     with c1:
@@ -367,33 +618,33 @@ if menu == "🏠 数据总览":
     
     if total_pages > 1:
         with c2:
-            st.session_state.page_num = st.slider(
+            new_page = st.slider(
                 f"📄 页码（共 {total_pages} 页 / {total_rows:,} 行）",
                 min_value=1, max_value=total_pages,
                 value=min(st.session_state.page_num, total_pages)
             )
+            if new_page != st.session_state.page_num:
+                st.session_state.page_num = new_page
+                st.rerun()
             page_df, _ = paginate_dataframe(df, page_size, st.session_state.page_num)
     
-    # 修复Bug 1: 用key+session来正确处理编辑
     edited = st.data_editor(
-        page_df, 
-        use_container_width=True, 
-        num_rows="dynamic", 
+        page_df,
+        use_container_width=True,
+        num_rows="dynamic",
         height=500,
         key=f"editor_page_{st.session_state.page_num}_{page_size}"
     )
     
-    # 修复Bug 1: 正确写回（用index对齐）
     if not edited.equals(page_df):
         if st.button("💾 保存本页修改", type="primary"):
-            save_snapshot(f"编辑了第 {st.session_state.page_num} 页数据")
-            # 用 update 方法正确写回（保持原索引对齐）
-            df.update(edited)
-            st.session_state.df = df
+            with st.spinner("保存中..."):
+                save_snapshot(f"编辑了第 {st.session_state.page_num} 页数据")
+                df.update(edited)
+                st.session_state.df = df
             st.success("✅ 已保存修改")
             st.rerun()
     
-    # 列信息
     with st.expander("📊 列详细信息"):
         info_df = pd.DataFrame({
             '列名': df.columns,
@@ -401,14 +652,14 @@ if menu == "🏠 数据总览":
             '非空': df.notna().sum().values,
             '缺失': df.isna().sum().values,
             '唯一值': df.nunique().values,
-            '示例': [str(df[c].dropna().iloc[0])[:30] if df[c].notna().any() else 'N/A' 
+            '示例': [str(df[c].dropna().iloc[0])[:30] if df[c].notna().any() else 'N/A'
                     for c in df.columns]
         })
         st.dataframe(info_df, use_container_width=True, hide_index=True)
 
 
 # ================================================================
-#                        🧹 数据清洗（修复Bug 2, 10）
+#                        🧹 数据清洗
 # ================================================================
 elif menu == "🧹 数据清洗":
     st.subheader("🧹 数据清洗")
@@ -419,14 +670,13 @@ elif menu == "🧹 数据清洗":
         missing = df.isna().sum()
         miss_df = pd.DataFrame({
             '列名': missing.index, '缺失数': missing.values,
-            '缺失率%': (missing/len(df)*100).round(1).values
+            '缺失率%': (missing / len(df) * 100).round(1).values
         })
         miss_df = miss_df[miss_df['缺失数'] > 0]
         
         if len(miss_df) > 0:
             st.dataframe(miss_df, use_container_width=True, hide_index=True)
             
-            # 借鉴Power Query: 支持多列批量处理
             c1, c2 = st.columns(2)
             with c1:
                 fill_cols = st.multiselect("选择列（可多选）", miss_df['列名'].tolist(), key="fc_multi")
@@ -441,37 +691,38 @@ elif menu == "🧹 数据清洗":
                 fill_val = st.text_input("固定值", key="fv")
             
             if st.button("✅ 执行", key="bf", type="primary") and fill_cols:
-                save_snapshot(f"{fill_method}: {','.join(fill_cols)}")
-                # 修复Bug 2: 使用 if/elif/else 结构，避免重复执行
-                try:
-                    if fill_method == "删除缺失行":
-                        before = len(df)
-                        df = df.dropna(subset=fill_cols).reset_index(drop=True)
-                        st.success(f"✅ 删除 {before-len(df)} 行")
-                    else:
-                        for col in fill_cols:
-                            if fill_method == "填充 0":
-                                df[col] = df[col].fillna(0)
-                            elif fill_method == "填充均值" and pd.api.types.is_numeric_dtype(df[col]):
-                                df[col] = df[col].fillna(df[col].mean())
-                            elif fill_method == "填充中位数" and pd.api.types.is_numeric_dtype(df[col]):
-                                df[col] = df[col].fillna(df[col].median())
-                            elif fill_method == "填充众数":
-                                m = df[col].mode()
-                                if len(m): df[col] = df[col].fillna(m[0])
-                            elif fill_method == "向下填充":
-                                df[col] = df[col].ffill()
-                            elif fill_method == "向上填充":
-                                df[col] = df[col].bfill()
-                            elif fill_method == "填充固定值":
-                                df[col] = df[col].fillna(fill_val)
-                            elif fill_method == "填充空字符串":
-                                df[col] = df[col].fillna('')
-                        st.success(f"✅ 已处理 {len(fill_cols)} 列")
-                    st.session_state.df = df
-                    st.rerun()
-                except Exception as e:
-                    st.error(friendly_error(e))
+                with st.spinner("处理中..."):
+                    try:
+                        save_snapshot(f"{fill_method}: {','.join(fill_cols)}")
+                        if fill_method == "删除缺失行":
+                            before = len(df)
+                            df = df.dropna(subset=fill_cols).reset_index(drop=True)
+                            st.success(f"✅ 删除 {before - len(df)} 行")
+                        else:
+                            for col in fill_cols:
+                                if fill_method == "填充 0":
+                                    df[col] = df[col].fillna(0)
+                                elif fill_method == "填充均值" and pd.api.types.is_numeric_dtype(df[col]):
+                                    df[col] = df[col].fillna(df[col].mean())
+                                elif fill_method == "填充中位数" and pd.api.types.is_numeric_dtype(df[col]):
+                                    df[col] = df[col].fillna(df[col].median())
+                                elif fill_method == "填充众数":
+                                    m = df[col].mode()
+                                    if len(m):
+                                        df[col] = df[col].fillna(m[0])
+                                elif fill_method == "向下填充":
+                                    df[col] = df[col].ffill()
+                                elif fill_method == "向上填充":
+                                    df[col] = df[col].bfill()
+                                elif fill_method == "填充固定值":
+                                    df[col] = df[col].fillna(fill_val)
+                                elif fill_method == "填充空字符串":
+                                    df[col] = df[col].fillna('')
+                            st.success(f"✅ 已处理 {len(fill_cols)} 列")
+                        st.session_state.df = df
+                        st.rerun()
+                    except Exception as e:
+                        st.error(friendly_error(e))
         else:
             st.success("🎉 数据没有缺失值！")
     
@@ -480,7 +731,6 @@ elif menu == "🧹 数据清洗":
         with c1:
             tc = st.selectbox("选择列", all_cols, key="tc")
             st.info(f"当前类型: `{df[tc].dtype}`")
-            # 显示前3个示例值
             samples = df[tc].dropna().head(3).tolist()
             if samples:
                 st.caption(f"示例: {samples}")
@@ -488,19 +738,20 @@ elif menu == "🧹 数据清洗":
             tt = st.selectbox("转换为", ["文本str", "整数int", "浮点数float", "日期datetime", "分类category"], key="tt")
         
         if st.button("✅ 转换", key="bt", type="primary"):
-            save_snapshot(f"将 [{tc}] 转换为 {tt}")
-            try:
-                m = {"文本str": lambda: df[tc].astype(str),
-                     "整数int": lambda: pd.to_numeric(df[tc], errors='coerce').astype('Int64'),
-                     "浮点数float": lambda: pd.to_numeric(df[tc], errors='coerce'),
-                     "日期datetime": lambda: pd.to_datetime(df[tc], errors='coerce'),
-                     "分类category": lambda: df[tc].astype('category')}
-                df[tc] = m[tt]()
-                st.session_state.df = df
-                st.success(f"✅ 已转换为 {tt}")
-                st.rerun()
-            except Exception as e:
-                st.error(friendly_error(e))
+            with st.spinner("转换中..."):
+                try:
+                    save_snapshot(f"将 [{tc}] 转换为 {tt}")
+                    m = {"文本str": lambda: df[tc].astype(str),
+                         "整数int": lambda: pd.to_numeric(df[tc], errors='coerce').astype('Int64'),
+                         "浮点数float": lambda: pd.to_numeric(df[tc], errors='coerce'),
+                         "日期datetime": lambda: pd.to_datetime(df[tc], errors='coerce'),
+                         "分类category": lambda: df[tc].astype('category')}
+                    df[tc] = m[tt]()
+                    st.session_state.df = df
+                    st.success(f"✅ 已转换为 {tt}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(friendly_error(e))
     
     with t3:
         op = st.radio("操作", ["重命名列", "删除列", "调整列顺序", "新增空列", "复制列"], horizontal=True, key="cm")
@@ -525,7 +776,7 @@ elif menu == "🧹 数据清洗":
                 st.rerun()
         
         elif op == "调整列顺序":
-            new_order = st.multiselect("按顺序选择所有列", df.columns.tolist(), 
+            new_order = st.multiselect("按顺序选择所有列", df.columns.tolist(),
                                         default=df.columns.tolist(), key="co")
             if st.button("✅ 应用", key="bco", type="primary"):
                 if len(new_order) == len(df.columns):
@@ -542,20 +793,19 @@ elif menu == "🧹 数据清洗":
             nv = st.text_input("默认值（留空 = NaN空值）", key="nv")
             if st.button("✅ 添加", key="bnc", type="primary") and nc:
                 save_snapshot(f"新增列 [{nc}]")
-                # 修复Bug 10: 留空时填充 NaN 而非 ""
                 df[nc] = nv if nv else np.nan
                 st.session_state.df = df
                 st.success(f"✅ 已添加列 [{nc}]")
                 st.rerun()
         
-        else:  # 复制列
+        else:
             src_col = st.selectbox("源列", df.columns.tolist(), key="cp_src")
             new_col_name = st.text_input("新列名", value=f"{src_col}_副本", key="cp_new")
             if st.button("✅ 复制", key="b_cp", type="primary") and new_col_name:
                 save_snapshot(f"复制列 [{src_col}] → [{new_col_name}]")
                 df[new_col_name] = df[src_col].copy()
                 st.session_state.df = df
-                st.success(f"✅ 已复制")
+                st.success("✅ 已复制")
                 st.rerun()
     
     with t4:
@@ -570,9 +820,10 @@ elif menu == "🧹 数据清洗":
                     orders.append(o == "升序↑")
             
             if st.button("✅ 排序", key="bs", type="primary"):
-                save_snapshot(f"按 {','.join(sc)} 排序")
-                df = df.sort_values(by=sc, ascending=orders).reset_index(drop=True)
-                st.session_state.df = df
+                with st.spinner("排序中..."):
+                    save_snapshot(f"按 {','.join(sc)} 排序")
+                    df = df.sort_values(by=sc, ascending=orders).reset_index(drop=True)
+                    st.session_state.df = df
                 st.success("✅ 排序完成")
                 st.rerun()
         
@@ -597,7 +848,7 @@ elif menu == "🧹 数据清洗":
                 mx = st.number_input("最大值", value=float(df[fc2].max()), key="mx")
             if st.button("✅ 筛选", key="bf3", type="primary"):
                 save_snapshot(f"筛选 [{fc2}] {mn}~{mx}")
-                df = df[(df[fc2]>=mn)&(df[fc2]<=mx)].reset_index(drop=True)
+                df = df[(df[fc2] >= mn) & (df[fc2] <= mx)].reset_index(drop=True)
                 st.session_state.df = df
                 st.success(f"✅ 保留 {len(df)} 行")
                 st.rerun()
@@ -609,22 +860,25 @@ elif menu == "🧹 数据清洗":
             oc = st.selectbox("选择数值列", numeric_cols, key="oc")
             om = st.radio("检测方法", ["IQR四分位法", "Z-Score标准差法", "固定范围"], horizontal=True, key="om")
             
+            lower = upper = 0.0
             if om == "IQR四分位法":
                 q1, q3 = df[oc].quantile(0.25), df[oc].quantile(0.75)
                 iqr = q3 - q1
-                lower, upper = q1 - 1.5*iqr, q3 + 1.5*iqr
+                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
                 st.info(f"正常范围: [{lower:.2f}, {upper:.2f}]")
             elif om == "Z-Score标准差法":
                 threshold = st.slider("Z-Score阈值", 1.0, 5.0, 3.0, key="zs")
                 mean, std = df[oc].mean(), df[oc].std()
-                lower, upper = mean - threshold*std, mean + threshold*std
+                lower, upper = mean - threshold * std, mean + threshold * std
                 st.info(f"正常范围: [{lower:.2f}, {upper:.2f}]")
             else:
                 c1, c2 = st.columns(2)
-                with c1: lower = st.number_input("下限", value=float(df[oc].min()), key="ol")
-                with c2: upper = st.number_input("上限", value=float(df[oc].max()), key="ou")
+                with c1:
+                    lower = st.number_input("下限", value=float(df[oc].min()), key="ol")
+                with c2:
+                    upper = st.number_input("上限", value=float(df[oc].max()), key="ou")
             
-            mask = (df[oc]<lower)|(df[oc]>upper)
+            mask = (df[oc] < lower) | (df[oc] > upper)
             n_out = mask.sum()
             st.warning(f"发现 {n_out} 个异常值（占 {n_out/len(df)*100:.1f}%）")
             
@@ -632,16 +886,17 @@ elif menu == "🧹 数据清洗":
                          horizontal=True, key="oa")
             
             if st.button("✅ 处理", key="boa", type="primary"):
-                save_snapshot(f"处理 [{oc}] 异常值: {oa}")
-                if oa == "标记异常值":
-                    df[f"{oc}_异常"] = mask.map({True: "异常", False: "正常"})
-                elif oa == "删除异常行":
-                    df = df[~mask].reset_index(drop=True)
-                elif oa == "替换为边界值(Winsorize)":
-                    df[oc] = df[oc].clip(lower=lower, upper=upper)
-                else:
-                    df.loc[mask, oc] = np.nan
-                st.session_state.df = df
+                with st.spinner("处理中..."):
+                    save_snapshot(f"处理 [{oc}] 异常值: {oa}")
+                    if oa == "标记异常值":
+                        df[f"{oc}_异常"] = mask.map({True: "异常", False: "正常"})
+                    elif oa == "删除异常行":
+                        df = df[~mask].reset_index(drop=True)
+                    elif oa == "替换为边界值(Winsorize)":
+                        df[oc] = df[oc].clip(lower=lower, upper=upper)
+                    else:
+                        df.loc[mask, oc] = np.nan
+                    st.session_state.df = df
                 st.success("✅ 处理完成")
                 st.rerun()
         else:
@@ -665,9 +920,10 @@ elif menu == "➕ 数学运算":
             cs = st.multiselect("选择列", numeric_cols, key="sum_c")
             sn = st.text_input("新列名", value="合计", key="sum_n")
             if st.button("✅ 求和", key="b_sum", type="primary") and cs:
-                save_snapshot(f"求和 {','.join(cs)} → [{sn}]")
-                df[sn] = df[cs].sum(axis=1)
-                st.session_state.df = df
+                with st.spinner("计算中..."):
+                    save_snapshot(f"求和 {','.join(cs)} → [{sn}]")
+                    df[sn] = df[cs].sum(axis=1)
+                    st.session_state.df = df
                 st.success(f"✅ 已生成 [{sn}]")
                 st.rerun()
         
@@ -675,9 +931,10 @@ elif menu == "➕ 数学运算":
             ca = st.multiselect("选择列", numeric_cols, key="avg_c")
             an = st.text_input("新列名", value="平均值", key="avg_n")
             if st.button("✅ 平均", key="b_avg", type="primary") and ca:
-                save_snapshot(f"平均 {','.join(ca)} → [{an}]")
-                df[an] = df[ca].mean(axis=1)
-                st.session_state.df = df
+                with st.spinner("计算中..."):
+                    save_snapshot(f"平均 {','.join(ca)} → [{an}]")
+                    df[an] = df[ca].mean(axis=1)
+                    st.session_state.df = df
                 st.success(f"✅ 已生成 [{an}]")
                 st.rerun()
         
@@ -694,19 +951,49 @@ elif menu == "➕ 数学运算":
         
         with st.expander("🔢 两列四则运算"):
             c1, c2, c3 = st.columns(3)
-            with c1: col_a = st.selectbox("列A", numeric_cols, key="a_a")
-            with c2: op = st.selectbox("运算符", ["+", "-", "×", "÷", "取余%", "幂^"], key="a_op")
-            with c3: col_b = st.selectbox("列B", numeric_cols, key="a_b")
-            ar_n = st.text_input("新列名", value=f"{col_a}{op}{col_b}", key="a_n")
+            with c1:
+                col_a = st.selectbox("列A", numeric_cols, key="a_a")
+            with c2:
+                op_arith = st.selectbox("运算符", ["+", "-", "×", "÷", "取余%", "幂^"], key="a_op")
+            with c3:
+                col_b = st.selectbox("列B", numeric_cols, key="a_b")
+            ar_n = st.text_input("新列名", value=f"{col_a}{op_arith}{col_b}", key="a_n")
+            
+            # 实时预览
+            if col_a and col_b:
+                try:
+                    preview_ops = {
+                        "+": df[col_a] + df[col_b], "-": df[col_a] - df[col_b],
+                        "×": df[col_a] * df[col_b], "÷": df[col_a] / df[col_b].replace(0, np.nan),
+                        "取余%": df[col_a] % df[col_b].replace(0, np.nan),
+                        "幂^": df[col_a] ** df[col_b]
+                    }
+                    preview_result = preview_ops[op_arith].head(3)
+                    
+                    st.markdown("**👁️ 预览前3行结果：**")
+                    preview_df = pd.DataFrame({
+                        col_a: df[col_a].head(3).values,
+                        op_arith: [op_arith] * 3,
+                        col_b: df[col_b].head(3).values,
+                        "=": ["="] * 3,
+                        ar_n: preview_result.round(4).values
+                    })
+                    st.dataframe(preview_df, hide_index=True, use_container_width=True)
+                except:
+                    pass
             
             if st.button("✅ 运算", key="b_ar", type="primary"):
-                save_snapshot(f"{col_a} {op} {col_b} → [{ar_n}]")
-                ops = {"+": df[col_a]+df[col_b], "-": df[col_a]-df[col_b],
-                       "×": df[col_a]*df[col_b], "÷": df[col_a]/df[col_b].replace(0,np.nan),
-                       "取余%": df[col_a]%df[col_b].replace(0,np.nan), "幂^": df[col_a]**df[col_b]}
-                df[ar_n] = ops[op]
-                st.session_state.df = df
-                st.success(f"✅ {col_a} {op} {col_b} → [{ar_n}]")
+                with st.spinner("计算中..."):
+                    save_snapshot(f"{col_a} {op_arith} {col_b} → [{ar_n}]")
+                    ops = {
+                        "+": df[col_a] + df[col_b], "-": df[col_a] - df[col_b],
+                        "×": df[col_a] * df[col_b], "÷": df[col_a] / df[col_b].replace(0, np.nan),
+                        "取余%": df[col_a] % df[col_b].replace(0, np.nan),
+                        "幂^": df[col_a] ** df[col_b]
+                    }
+                    df[ar_n] = ops[op_arith]
+                    st.session_state.df = df
+                st.success(f"✅ {col_a} {op_arith} {col_b} → [{ar_n}]")
                 st.rerun()
     
     with t2:
@@ -720,12 +1007,16 @@ elif menu == "➕ 数学运算":
             
             if st.button("✅ 执行", key="b_r", type="primary"):
                 save_snapshot(f"{rt} 应用到 [{cr}]")
-                if "ROUND" in rt: result = df[cr].round(dec)
-                elif "FLOOR" in rt: result = np.floor(df[cr])
-                elif "CEIL" in rt: result = np.ceil(df[cr])
-                else: result = np.trunc(df[cr])
+                if "ROUND" in rt:
+                    result = df[cr].round(dec)
+                elif "FLOOR" in rt:
+                    result = np.floor(df[cr])
+                elif "CEIL" in rt:
+                    result = np.ceil(df[cr])
+                else:
+                    result = np.trunc(df[cr])
                 
-                target = cr if mode=="覆盖原列" else f"{cr}_{rt.split('(')[0].strip()}"
+                target = cr if mode == "覆盖原列" else f"{cr}_{rt.split('(')[0].strip()}"
                 df[target] = result
                 st.session_state.df = df
                 st.success("✅ 完成")
@@ -748,7 +1039,7 @@ elif menu == "➕ 数学运算":
                 save_snapshot(f"{mf} 应用到 [{cmf}]")
                 fm = {"平方根SQRT": np.sqrt(df[cmf].abs()), "自然对数LN": np.log(df[cmf].clip(lower=0.001)),
                       "常用对数LOG10": np.log10(df[cmf].clip(lower=0.001)), "指数EXP": np.exp(df[cmf].clip(upper=500)),
-                      "平方": df[cmf]**2, "立方": df[cmf]**3}
+                      "平方": df[cmf] ** 2, "立方": df[cmf] ** 3}
                 df[f"{cmf}_{mf}"] = fm[mf]
                 st.session_state.df = df
                 st.success("✅ 完成")
@@ -783,9 +1074,9 @@ elif menu == "➕ 数学运算":
                 if total != 0:
                     save_snapshot(f"占比 [{cp}]")
                     if "小数" in pf:
-                        df[f"{cp}_占比"] = (df[cp]/total).round(4)
+                        df[f"{cp}_占比"] = (df[cp] / total).round(4)
                     else:
-                        df[f"{cp}_占比%"] = ((df[cp]/total)*100).round(2).astype(str) + '%'
+                        df[f"{cp}_占比%"] = ((df[cp] / total) * 100).round(2).astype(str) + '%'
                     st.session_state.df = df
                     st.success("✅ 完成")
                     st.rerun()
@@ -806,26 +1097,31 @@ elif menu == "➕ 数学运算":
         with st.expander("💰 金额大写转换"):
             ck = st.selectbox("选择金额列", numeric_cols, key="k_c")
             if st.button("✅ 转换", key="b_k", type="primary"):
-                save_snapshot(f"金额大写 [{ck}]")
-                def to_rmb(n):
-                    try:
-                        n = round(float(n), 2)
-                        units = ['', '拾', '佰', '仟', '万', '拾', '佰', '仟', '亿']
-                        digits = '零壹贰叁肆伍陆柒捌玖'
-                        s = str(int(abs(n)*100))
-                        result = ''
-                        for i, d in enumerate(reversed(s)):
-                            if i == 0: result = digits[int(d)] + '分' + result if int(d) else result
-                            elif i == 1: result = digits[int(d)] + '角' + result if int(d) else result
-                            else:
-                                idx = i - 2
-                                if idx < len(units):
-                                    result = digits[int(d)] + units[idx] + result
-                        return ('负' if n < 0 else '') + (result or '零') + '整'
-                    except:
-                        return str(n)
-                df[f"{ck}_大写"] = df[ck].apply(to_rmb)
-                st.session_state.df = df
+                with st.spinner("转换中..."):
+                    save_snapshot(f"金额大写 [{ck}]")
+                    
+                    def to_rmb(n):
+                        try:
+                            n = round(float(n), 2)
+                            units = ['', '拾', '佰', '仟', '万', '拾', '佰', '仟', '亿']
+                            digits = '零壹贰叁肆伍陆柒捌玖'
+                            s = str(int(abs(n) * 100))
+                            result = ''
+                            for i, d in enumerate(reversed(s)):
+                                if i == 0:
+                                    result = digits[int(d)] + '分' + result if int(d) else result
+                                elif i == 1:
+                                    result = digits[int(d)] + '角' + result if int(d) else result
+                                else:
+                                    idx = i - 2
+                                    if idx < len(units):
+                                        result = digits[int(d)] + units[idx] + result
+                            return ('负' if n < 0 else '') + (result or '零') + '整'
+                        except:
+                            return str(n)
+                    
+                    df[f"{ck}_大写"] = df[ck].apply(to_rmb)
+                    st.session_state.df = df
                 st.success("✅ 完成")
                 st.rerun()
         
@@ -841,11 +1137,11 @@ elif menu == "➕ 数学运算":
             if st.button("✅ 换算", key="b_u", type="primary"):
                 save_snapshot(f"单位换算 [{cu}] {ut}")
                 um = {
-                    "元→万元(÷10000)": df[cu]/10000, "万元→元(×10000)": df[cu]*10000,
-                    "元→亿元(÷100000000)": df[cu]/100000000,
-                    "kg→吨(÷1000)": df[cu]/1000, "吨→kg(×1000)": df[cu]*1000,
-                    "米→千米(÷1000)": df[cu]/1000, "千米→米(×1000)": df[cu]*1000,
-                    "摄氏度→华氏度": df[cu]*9/5+32, "华氏度→摄氏度": (df[cu]-32)*5/9,
+                    "元→万元(÷10000)": df[cu] / 10000, "万元→元(×10000)": df[cu] * 10000,
+                    "元→亿元(÷100000000)": df[cu] / 100000000,
+                    "kg→吨(÷1000)": df[cu] / 1000, "吨→kg(×1000)": df[cu] * 1000,
+                    "米→千米(÷1000)": df[cu] / 1000, "千米→米(×1000)": df[cu] * 1000,
+                    "摄氏度→华氏度": df[cu] * 9 / 5 + 32, "华氏度→摄氏度": (df[cu] - 32) * 5 / 9,
                 }
                 df[f"{cu}_{ut.split('(')[0]}"] = um[ut].round(4)
                 st.session_state.df = df
@@ -879,24 +1175,28 @@ elif menu == "📝 文本处理":
             sp = 0
             if "中间" in lm:
                 c1, c2 = st.columns(2)
-                with c1: sp = st.number_input("起始位置", 0, 1000, 0, key="lr_s")
-                with c2: cnt = st.number_input("字符数", 1, 1000, 3, key="lr_cnt")
+                with c1:
+                    sp = st.number_input("起始位置", 0, 1000, 0, key="lr_s")
+                with c2:
+                    cnt = st.number_input("字符数", 1, 1000, 3, key="lr_cnt")
             else:
                 cnt = st.number_input("字符数", 1, 1000, 3, key="lr_cnt2")
             
             if st.button("✅ 截取", key="b_lr", type="primary"):
                 save_snapshot(f"截取 [{cl}] {lm}")
                 s = df[cl].astype(str)
-                if "左" in lm: df[f"{cl}_left{cnt}"] = s.str[:cnt]
-                elif "右" in lm: df[f"{cl}_right{cnt}"] = s.str[-cnt:]
-                else: df[f"{cl}_mid"] = s.str[sp:sp+cnt]
+                if "左" in lm:
+                    df[f"{cl}_left{cnt}"] = s.str[:cnt]
+                elif "右" in lm:
+                    df[f"{cl}_right{cnt}"] = s.str[-cnt:]
+                else:
+                    df[f"{cl}_mid"] = s.str[sp:sp + cnt]
                 st.session_state.df = df
                 st.success("✅ 完成")
                 st.rerun()
     
     with t2:
         with st.expander("🔍 查找替换（SUBSTITUTE）"):
-            # 批量替换支持
             cr2 = st.multiselect("选择列（可多选）", all_cols, key="sub_c")
             ft = st.text_input("查找内容", key="sub_f")
             rt2 = st.text_input("替换为", key="sub_r")
@@ -916,9 +1216,12 @@ elif menu == "📝 文本处理":
                 save_snapshot(f"清理空格 {','.join(ct2)}")
                 for c in ct2:
                     s = df[c].astype(str)
-                    if "首尾" in tm: df[c] = s.str.strip()
-                    elif "所有" in tm: df[c] = s.str.replace(r'\s+', '', regex=True)
-                    else: df[c] = s.str.replace(r'\s+', ' ', regex=True).str.strip()
+                    if "首尾" in tm:
+                        df[c] = s.str.strip()
+                    elif "所有" in tm:
+                        df[c] = s.str.replace(r'\s+', '', regex=True)
+                    else:
+                        df[c] = s.str.replace(r'\s+', ' ', regex=True).str.strip()
                 st.session_state.df = df
                 st.success("✅ 完成")
                 st.rerun()
@@ -930,9 +1233,12 @@ elif menu == "📝 文本处理":
                 save_snapshot(f"大小写转换 {','.join(cc2)}")
                 for c in cc2:
                     s = df[c].astype(str)
-                    if "大写" in cm2 and "首" not in cm2: df[c] = s.str.upper()
-                    elif "小写" in cm2: df[c] = s.str.lower()
-                    else: df[c] = s.str.title()
+                    if "大写" in cm2 and "首" not in cm2:
+                        df[c] = s.str.upper()
+                    elif "小写" in cm2:
+                        df[c] = s.str.lower()
+                    else:
+                        df[c] = s.str.title()
                 st.session_state.df = df
                 st.success("✅ 完成")
                 st.rerun()
@@ -975,7 +1281,7 @@ elif menu == "📝 文本处理":
             msp = st.number_input("最多拆分列数", 2, 20, 3, key="spl_m")
             if st.button("✅ 分列", key="b_spl", type="primary") and ssp:
                 save_snapshot(f"分列 [{csp}] 按 '{ssp}'")
-                result = df[csp].astype(str).str.split(ssp, n=msp-1, expand=True)
+                result = df[csp].astype(str).str.split(ssp, n=msp - 1, expand=True)
                 for i in range(result.shape[1]):
                     df[f"{csp}_part{i+1}"] = result[i]
                 st.session_state.df = df
@@ -988,8 +1294,10 @@ elif menu == "📝 文本处理":
             
             if "编号" in pft:
                 c1, c2 = st.columns(2)
-                with c1: start_num = st.number_input("起始编号", 1, 999999, 1, key="pf_sn")
-                with c2: prefix_str = st.text_input("前缀", value="NO.", key="pf_ps")
+                with c1:
+                    start_num = st.number_input("起始编号", 1, 999999, 1, key="pf_sn")
+                with c2:
+                    prefix_str = st.text_input("前缀", value="NO.", key="pf_ps")
                 pad = st.number_input("编号位数(补零)", 1, 10, 4, key="pf_pad")
             else:
                 affix = st.text_input("前缀/后缀文本", key="pf_af")
@@ -1009,7 +1317,7 @@ elif menu == "📝 文本处理":
 
 
 # ================================================================
-#                        📅 日期处理（修复Bug 3, 5）
+#                        📅 日期处理
 # ================================================================
 elif menu == "📅 日期处理":
     st.subheader("📅 日期处理")
@@ -1051,7 +1359,7 @@ elif menu == "📅 日期处理":
                     pm2 = {"年份": dt.year, "月份": dt.month, "日": dt.day, "星期": dt.day_name(),
                            "季度": dt.quarter, "周数": dt.isocalendar().week.astype('Int64'),
                            "年月": dt.strftime('%Y-%m'),
-                           "是否月末": (dt.day == dt.days_in_month).map({True:"是",False:"否"})}
+                           "是否月末": (dt.day == dt.days_in_month).map({True: "是", False: "否"})}
                     for p in parts:
                         df[f"{ced}_{p}"] = pm2[p]
                     st.session_state.df = df
@@ -1060,14 +1368,16 @@ elif menu == "📅 日期处理":
             
             with st.expander("⏱️ 日期差（DATEDIF）"):
                 c1, c2 = st.columns(2)
-                with c1: ds = st.selectbox("开始日期", date_cols, key="dd_s")
-                with c2: de_col = st.selectbox("结束日期", date_cols, key="dd_e")
+                with c1:
+                    ds = st.selectbox("开始日期", date_cols, key="dd_s")
+                with c2:
+                    de_col = st.selectbox("结束日期", date_cols, key="dd_e")
                 du = st.radio("单位", ["天", "小时", "月(近似)", "年(近似)"], horizontal=True, key="dd_u")
                 if st.button("✅ 计算", key="b_dd", type="primary"):
                     save_snapshot(f"日期差 [{de_col}]-[{ds}]")
                     delta = df[de_col] - df[ds]
-                    um2 = {"天": delta.dt.days, "小时": (delta.dt.total_seconds()/3600).round(1),
-                           "月(近似)": (delta.dt.days/30.44).round(1), "年(近似)": (delta.dt.days/365.25).round(2)}
+                    um2 = {"天": delta.dt.days, "小时": (delta.dt.total_seconds() / 3600).round(1),
+                           "月(近似)": (delta.dt.days / 30.44).round(1), "年(近似)": (delta.dt.days / 365.25).round(2)}
                     df[f"日期差_{du}"] = um2[du]
                     st.session_state.df = df
                     st.success("✅ 完成")
@@ -1076,11 +1386,12 @@ elif menu == "📅 日期处理":
             with st.expander("➡️ 日期偏移"):
                 co = st.selectbox("日期列", date_cols, key="do_c")
                 c1, c2 = st.columns(2)
-                with c1: ov = st.number_input("偏移量", value=7, key="do_v")
-                with c2: ou = st.selectbox("单位", ["天", "周", "月", "年"], key="do_u")
+                with c1:
+                    ov = st.number_input("偏移量", value=7, key="do_v")
+                with c2:
+                    ou = st.selectbox("单位", ["天", "周", "月", "年"], key="do_u")
                 if st.button("✅ 偏移", key="b_do", type="primary"):
                     save_snapshot(f"日期偏移 [{co}] {ov}{ou}")
-                    # 修复Bug 3: 强制转 int
                     ov_int = int(ov)
                     om2 = {"天": pd.Timedelta(days=ov_int), "周": pd.Timedelta(weeks=ov_int),
                            "月": pd.DateOffset(months=ov_int), "年": pd.DateOffset(years=ov_int)}
@@ -1091,32 +1402,33 @@ elif menu == "📅 日期处理":
     
     with t3:
         with st.expander("📅 生成日期序列（独立功能，不影响主数据）"):
-            st.warning("⚠️ 注意：此功能会将生成的日期序列作为**新表**追加显示，不会覆盖你的主数据")
+            st.warning("⚠️ 此功能生成日期序列供下载，不会覆盖主数据")
             
             c1, c2, c3 = st.columns(3)
-            with c1: sd = st.date_input("开始日期", key="gs_s")
-            with c2: ed = st.date_input("结束日期", key="gs_e")
-            with c3: freq = st.selectbox("频率", ["每天", "每周", "每月", "每季度", "每年"], key="gs_f")
+            with c1:
+                sd = st.date_input("开始日期", key="gs_s")
+            with c2:
+                ed = st.date_input("结束日期", key="gs_e")
+            with c3:
+                freq = st.selectbox("频率", ["每天", "每周", "每月", "每季度", "每年"], key="gs_f")
             
             if st.button("✅ 生成", key="b_gs", type="primary"):
                 fm = {"每天": "D", "每周": "W", "每月": "MS", "每季度": "QS", "每年": "YS"}
                 try:
                     dates = pd.date_range(start=sd, end=ed, freq=fm[freq])
                     new_df = pd.DataFrame({"日期": dates})
-                    # 修复Bug 5: 不覆盖主数据，单独显示
                     st.success(f"✅ 生成 {len(dates)} 条日期")
                     st.dataframe(new_df.head(50))
                     
-                    # 提供下载
                     csv = new_df.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("⬇️ 下载日期序列CSV", csv, 
-                                      file_name=f"日期序列_{freq}.csv", mime="text/csv")
+                    st.download_button("⬇️ 下载日期序列CSV", csv,
+                                       file_name=f"日期序列_{freq}.csv", mime="text/csv")
                 except Exception as e:
                     st.error(friendly_error(e))
 
 
 # ================================================================
-#                        🔎 条件与查找（修复Bug 6）
+#                        🔎 条件与查找
 # ================================================================
 elif menu == "🔎 条件与查找":
     st.subheader("🔎 条件判断与查找匹配")
@@ -1126,16 +1438,20 @@ elif menu == "🔎 条件与查找":
     with t1:
         st.markdown("##### ❓ IF 条件判断")
         c1, c2, c3 = st.columns(3)
-        with c1: ic = st.selectbox("判断列", all_cols, key="if_c")
-        with c2: it = st.selectbox("条件", [">", ">=", "<", "<=", "==", "!=", "包含", "不包含", "为空", "不为空"], key="if_t")
+        with c1:
+            ic = st.selectbox("判断列", all_cols, key="if_c")
+        with c2:
+            it = st.selectbox("条件", [">", ">=", "<", "<=", "==", "!=", "包含", "不包含", "为空", "不为空"], key="if_t")
         with c3:
             iv = ""
             if it not in ["为空", "不为空"]:
                 iv = st.text_input("条件值", key="if_v")
         
         c1, c2 = st.columns(2)
-        with c1: tv = st.text_input("满足时 =", value="是", key="if_tv")
-        with c2: fv = st.text_input("不满足时 =", value="否", key="if_fv")
+        with c1:
+            tv = st.text_input("满足时 =", value="是", key="if_tv")
+        with c2:
+            fv = st.text_input("不满足时 =", value="否", key="if_fv")
         
         ifn = st.text_input("新列名", value="判断结果", key="if_n")
         
@@ -1159,8 +1475,8 @@ elif menu == "🔎 条件与查找":
                 "==": cd == threshold, "!=": cd != threshold,
                 "包含": col_data.astype(str).str.contains(str(iv), na=False),
                 "不包含": ~col_data.astype(str).str.contains(str(iv), na=False),
-                "为空": col_data.isna() | (col_data.astype(str).str.strip()==''),
-                "不为空": col_data.notna() & (col_data.astype(str).str.strip()!=''),
+                "为空": col_data.isna() | (col_data.astype(str).str.strip() == ''),
+                "不为空": col_data.notna() & (col_data.astype(str).str.strip() != ''),
             }
             df[ifn] = np.where(cond_map[it], tv, fv)
             st.session_state.df = df
@@ -1174,11 +1490,14 @@ elif menu == "🔎 条件与查找":
         
         conditions = []
         for i in range(int(num_cond)):
-            c1, c2, c3 = st.columns([1,1,1])
-            with c1: op2 = st.selectbox(f"条件{i+1}运算符", [">=",">","<=","<","==","包含"], key=f"ifs_o_{i}")
-            with c2: val = st.text_input(f"条件{i+1}值", key=f"ifs_v_{i}")
-            with c3: res = st.text_input(f"条件{i+1}结果", key=f"ifs_r_{i}")
-            conditions.append((op2, val, res))
+            c1, c2, c3 = st.columns([1, 1, 1])
+            with c1:
+                op_ifs = st.selectbox(f"条件{i+1}运算符", [">=", ">", "<=", "<", "==", "包含"], key=f"ifs_o_{i}")
+            with c2:
+                val = st.text_input(f"条件{i+1}值", key=f"ifs_v_{i}")
+            with c3:
+                res = st.text_input(f"条件{i+1}结果", key=f"ifs_r_{i}")
+            conditions.append((op_ifs, val, res))
         
         default = st.text_input("默认值（都不满足时）", value="其他", key="ifs_d")
         ifs_name = st.text_input("新列名", value="分类结果", key="ifs_nm")
@@ -1186,8 +1505,9 @@ elif menu == "🔎 条件与查找":
         if st.button("✅ 执行分类", key="b_ifs", type="primary"):
             save_snapshot(f"IFS多条件分类 [{ifs_col}]")
             result = pd.Series(default, index=df.index)
-            for op2, val, res in reversed(conditions):
-                if not val or not res: continue
+            for op_ifs, val, res in reversed(conditions):
+                if not val or not res:
+                    continue
                 try:
                     vn = float(val)
                     cd2 = pd.to_numeric(df[ifs_col], errors='coerce')
@@ -1195,9 +1515,9 @@ elif menu == "🔎 条件与查找":
                     vn = val
                     cd2 = df[ifs_col].astype(str)
                 
-                om3 = {">=": cd2>=vn, ">": cd2>vn, "<=": cd2<=vn, "<": cd2<vn,
-                       "==": cd2==vn, "包含": df[ifs_col].astype(str).str.contains(str(val), na=False)}
-                result[om3[op2]] = res
+                om3 = {">=": cd2 >= vn, ">": cd2 > vn, "<=": cd2 <= vn, "<": cd2 < vn,
+                       "==": cd2 == vn, "包含": df[ifs_col].astype(str).str.contains(str(val), na=False)}
+                result[om3[op_ifs]] = res
             
             df[ifs_name] = result
             st.session_state.df = df
@@ -1206,7 +1526,7 @@ elif menu == "🔎 条件与查找":
     
     with t3:
         st.markdown("##### 🔎 VLOOKUP 跨表查找")
-        lf = st.file_uploader("上传查找表", type=["xlsx","xls","csv"], key="vl_f")
+        lf = st.file_uploader("上传查找表", type=["xlsx", "xls", "csv"], key="vl_f")
         
         if lf:
             try:
@@ -1218,28 +1538,29 @@ elif menu == "🔎 条件与查找":
                 st.write("📋 查找表预览：", df_lk.head())
                 
                 c1, c2 = st.columns(2)
-                with c1: mk = st.selectbox("主表匹配列", all_cols, key="vl_mk")
-                with c2: lk = st.selectbox("查找表匹配列", df_lk.columns.tolist(), key="vl_lk")
+                with c1:
+                    mk = st.selectbox("主表匹配列", all_cols, key="vl_mk")
+                with c2:
+                    lk = st.selectbox("查找表匹配列", df_lk.columns.tolist(), key="vl_lk")
                 
                 rc = st.multiselect("要匹配回来的列", [c for c in df_lk.columns if c != lk], key="vl_rc")
                 
                 if st.button("✅ VLOOKUP", key="b_vl", type="primary") and rc:
-                    save_snapshot(f"VLOOKUP from {lf.name}")
-                    # 修复Bug 6: 处理同名列冲突
-                    lk_sub = df_lk[[lk]+rc].drop_duplicates(subset=lk)
-                    
-                    # 重命名冲突的列
-                    rename_map = {}
-                    for col in rc:
-                        if col in df.columns:
-                            rename_map[col] = f"{col}_查找"
-                    if rename_map:
-                        lk_sub = lk_sub.rename(columns=rename_map)
-                    
-                    df = df.merge(lk_sub, left_on=mk, right_on=lk, how='left')
-                    if lk != mk and lk in df.columns:
-                        df = df.drop(columns=[lk])
-                    st.session_state.df = df
+                    with st.spinner("匹配中..."):
+                        save_snapshot(f"VLOOKUP from {lf.name}")
+                        lk_sub = df_lk[[lk] + rc].drop_duplicates(subset=lk)
+                        
+                        rename_map = {}
+                        for col in rc:
+                            if col in df.columns:
+                                rename_map[col] = f"{col}_查找"
+                        if rename_map:
+                            lk_sub = lk_sub.rename(columns=rename_map)
+                        
+                        df = df.merge(lk_sub, left_on=mk, right_on=lk, how='left')
+                        if lk != mk and lk in df.columns:
+                            df = df.drop(columns=[lk])
+                        st.session_state.df = df
                     st.success(f"✅ VLOOKUP完成，匹配了 {len(rc)} 列")
                     st.rerun()
             except Exception as e:
@@ -1262,7 +1583,7 @@ elif menu == "🔎 条件与查找":
                 save_snapshot(f"去重: {dpa}")
                 subset = dpc if dpc else None
                 if "标记" in dpa:
-                    df["是否重复"] = df.duplicated(subset=subset, keep=False).map({True:"重复",False:"唯一"})
+                    df["是否重复"] = df.duplicated(subset=subset, keep=False).map({True: "重复", False: "唯一"})
                 elif "首条" in dpa:
                     b = len(df)
                     df = df.drop_duplicates(subset=subset, keep='first').reset_index(drop=True)
@@ -1276,7 +1597,7 @@ elif menu == "🔎 条件与查找":
 
 
 # ================================================================
-#                        📊 统计汇总（修复Bug 7）
+#                        📊 统计汇总
 # ================================================================
 elif menu == "📊 统计汇总":
     st.subheader("📊 统计汇总与分析")
@@ -1292,20 +1613,22 @@ elif menu == "📊 统计汇总":
         
         if st.button("✅ 汇总", key="b_pv", type="primary") and gc and ac and af:
             try:
-                fm2 = {"求和sum":"sum","平均值mean":"mean","计数count":"count",
-                       "最大值max":"max","最小值min":"min","中位数median":"median"}
-                funcs = [fm2[f] for f in af]
-                pivot = df.groupby(gc)[ac].agg(funcs).round(2)
-                if isinstance(pivot.columns, pd.MultiIndex):
-                    pivot.columns = ['_'.join(c).strip() for c in pivot.columns]
-                pivot = pivot.reset_index()
+                with st.spinner("汇总中..."):
+                    fm2 = {"求和sum": "sum", "平均值mean": "mean", "计数count": "count",
+                           "最大值max": "max", "最小值min": "min", "中位数median": "median"}
+                    funcs = [fm2[f] for f in af]
+                    pivot = df.groupby(gc)[ac].agg(funcs).round(2)
+                    if isinstance(pivot.columns, pd.MultiIndex):
+                        pivot.columns = ['_'.join(c).strip() for c in pivot.columns]
+                    pivot = pivot.reset_index()
                 
                 st.dataframe(pivot, use_container_width=True)
                 st.session_state['pivot_table'] = pivot
+                st.success("✅ 汇总完成，下方可勾选合并回主表")
                 
                 if st.checkbox("将汇总结果合并回主表", key="pv_merge"):
                     save_snapshot("合并汇总表到主表")
-                    df = df.merge(pivot, on=gc, how='left', suffixes=('','_汇总'))
+                    df = df.merge(pivot, on=gc, how='left', suffixes=('', '_汇总'))
                     st.session_state.df = df
                     st.success("✅ 已合并")
                     st.rerun()
@@ -1320,8 +1643,8 @@ elif menu == "📊 统计汇总":
         
         if st.button("✅ 执行", key="b_si", type="primary"):
             save_snapshot(f"{sf} by [{sg}]")
-            fm3 = {"SUMIF求和":"sum","AVERAGEIF平均":"mean","COUNTIF计数":"count",
-                   "MAXIF最大":"max","MINIF最小":"min"}
+            fm3 = {"SUMIF求和": "sum", "AVERAGEIF平均": "mean", "COUNTIF计数": "count",
+                   "MAXIF最大": "max", "MINIF最小": "min"}
             f = fm3[sf]
             df[f"{sv2}_{f}_by_{sg}"] = df.groupby(sg)[sv2].transform(f).round(2)
             st.session_state.df = df
@@ -1331,14 +1654,13 @@ elif menu == "📊 统计汇总":
     with t3:
         if numeric_cols:
             stats = df[numeric_cols].describe().round(2).T
-            stats.columns = ['计数','均值','标准差','最小','25%','中位数','75%','最大']
+            stats.columns = ['计数', '均值', '标准差', '最小', '25%', '中位数', '75%', '最大']
             stats['总和'] = df[numeric_cols].sum().round(2)
             stats['缺失'] = df[numeric_cols].isna().sum()
             st.dataframe(stats, use_container_width=True)
             
-            # 修复Bug 7: 只在用户点击导出时才生成
             if st.button("💾 添加到导出文件", key="b_stats_export"):
-                st.session_state['stats_table'] = stats.reset_index().rename(columns={'index':'列名'})
+                st.session_state['stats_table'] = stats.reset_index().rename(columns={'index': '列名'})
                 st.success("✅ 已添加，下载时会包含此统计表")
         else:
             st.warning("无数值列")
@@ -1378,14 +1700,158 @@ elif menu == "📊 统计汇总":
 
 
 # ================================================================
-#                        🧮 公式引擎（智能识别版，修复Bug 4）
+#                        🧮 公式引擎
 # ================================================================
 elif menu == "🧮 公式引擎":
     st.subheader("🧮 智能公式生成器")
     st.caption("✨ 全程点选，无需写代码！自动识别您的列名")
     
-    t1, t2, t3, t4 = st.tabs(["🎯 快捷公式（推荐）", "🔧 公式构建器", "📚 常用模板", "💻 高级模式"])
+    t0, t1, t2, t3, t4 = st.tabs([
+        "💬 用人话告诉我",
+        "🎯 快捷公式",
+        "🔧 公式构建器",
+        "📚 常用模板",
+        "💻 高级模式"
+    ])
     
+    # ============ Tab 0: 自然语言 ============
+    with t0:
+        st.markdown("##### 💬 用大白话告诉我您想做什么")
+        st.caption("✨ 不用想公式，直接说人话！")
+        
+        st.markdown("**💡 试试这些说法（点击直接填入）：**")
+        example_col1, example_col2 = st.columns(2)
+        
+        examples = [
+            "把单价乘以数量，叫总价",
+            "用销售额减去单价，叫差额",
+            "把单价打8折",
+            "单价乘以1.13",
+            "把客户姓名和地区拼起来",
+            "把单价保留2位小数",
+            "标记销售额大于1000的为高",
+            "把数量除以单价",
+        ]
+        
+        for i, ex in enumerate(examples):
+            col = example_col1 if i % 2 == 0 else example_col2
+            with col:
+                if st.button(f"💬 {ex}", key=f"ex_{i}", use_container_width=True):
+                    st.session_state.nl_input = ex
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        nl_query = st.text_area(
+            "🗣️ 请描述您想做的事情",
+            value=st.session_state.nl_input,
+            height=80,
+            placeholder='例如：把单价乘以数量，结果叫做"总价"',
+            key="nl_query_input"
+        )
+        
+        if nl_query:
+            parsed = parse_natural_language(nl_query, df)
+            
+            st.markdown("##### 🤖 我理解的意思：")
+            
+            understanding = []
+            if parsed['op']:
+                op_names = {
+                    'multiply': '相乘', 'divide': '相除', 'add': '相加', 'subtract': '相减',
+                    'concat': '拼接文本', 'round': '四舍五入',
+                    'condition': '条件判断', 'discount': '打折计算'
+                }
+                understanding.append(f"**操作**: {op_names.get(parsed['op'], '未知')}")
+            
+            if parsed['cols']:
+                understanding.append(f"**涉及列**: {', '.join(parsed['cols'])}")
+            
+            if parsed['numbers']:
+                understanding.append(f"**数字**: {', '.join(map(str, parsed['numbers']))}")
+            
+            understanding.append(f"**新列名**: {parsed['new_name']}")
+            
+            for u in understanding:
+                st.markdown(f"- {u}")
+            
+            can_execute = parsed['op'] is not None and (parsed['cols'] or parsed['numbers'])
+            
+            if can_execute:
+                st.markdown("---")
+                
+                if st.button("🚀 就这么做！", type="primary", use_container_width=True, key="nl_execute"):
+                    try:
+                        with st.spinner("执行中..."):
+                            save_snapshot(f"自然语言: {nl_query[:30]}")
+                            
+                            if parsed['op'] in ['multiply', 'divide', 'add', 'subtract']:
+                                if len(parsed['cols']) >= 2:
+                                    a, b = df[parsed['cols'][0]], df[parsed['cols'][1]]
+                                elif len(parsed['cols']) == 1 and parsed['numbers']:
+                                    a, b = df[parsed['cols'][0]], parsed['numbers'][0]
+                                else:
+                                    st.error("❌ 信息不足，请明确说明涉及哪些列和数字")
+                                    st.stop()
+                                
+                                if parsed['op'] == 'multiply':
+                                    result = a * b
+                                elif parsed['op'] == 'divide':
+                                    if hasattr(b, 'replace'):
+                                        result = a / b.replace(0, np.nan)
+                                    else:
+                                        result = a / b if b != 0 else np.nan
+                                elif parsed['op'] == 'add':
+                                    result = a + b
+                                else:
+                                    result = a - b
+                                
+                                if hasattr(result, 'round'):
+                                    df[parsed['new_name']] = result.round(2)
+                                else:
+                                    df[parsed['new_name']] = round(result, 2)
+                            
+                            elif parsed['op'] == 'concat':
+                                if len(parsed['cols']) >= 2:
+                                    df[parsed['new_name']] = df[parsed['cols'][0]].astype(str) + df[parsed['cols'][1]].astype(str)
+                                else:
+                                    st.error("❌ 拼接需要至少2列")
+                                    st.stop()
+                            
+                            elif parsed['op'] == 'round':
+                                if parsed['cols']:
+                                    digits = int(parsed['numbers'][0]) if parsed['numbers'] else 2
+                                    df[parsed['new_name']] = df[parsed['cols'][0]].round(digits)
+                            
+                            elif parsed['op'] == 'discount':
+                                if parsed['cols'] and parsed['numbers']:
+                                    rate = parsed['numbers'][0]
+                                    if rate > 1:
+                                        rate = rate / 10
+                                    df[parsed['new_name']] = (df[parsed['cols'][0]] * rate).round(2)
+                            
+                            elif parsed['op'] == 'condition':
+                                if parsed['cols'] and parsed['numbers']:
+                                    threshold = parsed['numbers'][0]
+                                    if '大于' in nl_query:
+                                        mask = df[parsed['cols'][0]] > threshold
+                                    elif '小于' in nl_query:
+                                        mask = df[parsed['cols'][0]] < threshold
+                                    else:
+                                        mask = df[parsed['cols'][0]] == threshold
+                                    df[parsed['new_name']] = np.where(mask, '高', '低')
+                            
+                            st.session_state.df = df
+                        st.success(f"✅ 已生成 [{parsed['new_name']}]，看看主表！")
+                        st.balloons()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(friendly_error(e))
+            else:
+                st.warning("🤔 我没完全明白您的意思，请：\n1. 说清楚涉及哪些列（列名要和数据中一致）\n2. 说清楚要做什么操作\n3. 给结果起个名字")
+                st.info("💡 不行的话，可以点击右边 \"🎯 快捷公式\" 标签，更直观")
+    
+    # ============ Tab 1: 快捷公式 ============
     with t1:
         st.markdown("##### 👇 选择您要做的事情")
         
@@ -1409,32 +1875,26 @@ elif menu == "🧮 公式引擎":
         
         st.markdown("---")
         
-        if numeric_cols:
-            # 智能识别列
-            money_col = smart_detect_column(numeric_cols, ['金额', '价格', '价', 'amount', 'price', 'money'])
-            income_col = smart_detect_column(numeric_cols, ['收入', '销售', '营收', 'income', 'revenue', 'sales'])
-            cost_col = smart_detect_column(numeric_cols, ['成本', '费用', 'cost', 'expense'])
-            qty_col = smart_detect_column(numeric_cols, ['数量', '件数', 'qty', 'quantity', 'count'])
-            
-            def col_idx(col, cols_list):
-                """获取列在列表中的索引（用于selectbox默认选中）"""
-                try: return cols_list.index(col)
-                except: return 0
+        # 智能识别
+        money_col = smart_detect_column(numeric_cols, ['金额', '价格', '价', 'amount', 'price'])
+        income_col = smart_detect_column(numeric_cols, ['收入', '销售', '营收', 'income', 'revenue', 'sales'])
+        cost_col = smart_detect_column(numeric_cols, ['成本', '费用', 'cost', 'expense'])
         
         if "含税金额" in scene:
-            col = st.selectbox("📌 选择「金额」列", numeric_cols, 
-                              index=col_idx(money_col, numeric_cols), key="q1_c")
+            col = st.selectbox("📌 选择「金额」列", numeric_cols,
+                              index=col_index_safe(money_col, numeric_cols), key="q1_c")
             new_name = st.text_input("✏️ 新列名", value="含税金额", key="q1_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} × 1.13</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key="q1_b", type="primary", use_container_width=True):
                 save_snapshot(f"含税金额 = {col} × 1.13")
                 df[new_name] = (df[col] * 1.13).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "税额" in scene:
             col = st.selectbox("📌 选择「金额」列", numeric_cols,
-                              index=col_idx(money_col, numeric_cols), key="q2_c")
+                              index=col_index_safe(money_col, numeric_cols), key="q2_c")
             rate = st.number_input("💯 税率(%)", value=13.0, key="q2_r")
             new_name = st.text_input("✏️ 新列名", value="税额", key="q2_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} × {rate}%</b></div>', unsafe_allow_html=True)
@@ -1442,47 +1902,57 @@ elif menu == "🧮 公式引擎":
                 save_snapshot(f"税额 = {col} × {rate}%")
                 df[new_name] = (df[col] * rate / 100).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "折扣价" in scene:
             c1, c2 = st.columns(2)
-            with c1: col_a = st.selectbox("📌 「原价」列", numeric_cols, key="q3_a")
-            with c2: col_b = st.selectbox("📌 「折扣率」列", numeric_cols, key="q3_b")
+            with c1:
+                col_a = st.selectbox("📌 「原价」列", numeric_cols, key="q3_a")
+            with c2:
+                col_b = st.selectbox("📌 「折扣率」列", numeric_cols, key="q3_b")
             new_name = st.text_input("✏️ 新列名", value="折扣价", key="q3_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} × {col_b}</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key="q3_b2", type="primary", use_container_width=True):
                 save_snapshot(f"折扣价 = {col_a} × {col_b}")
                 df[new_name] = (df[col_a] * df[col_b]).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif scene.startswith("💰 计算利润（"):
             c1, c2 = st.columns(2)
-            with c1: col_a = st.selectbox("📌 「收入」列", numeric_cols,
-                                          index=col_idx(income_col, numeric_cols), key="q4_a")
-            with c2: col_b = st.selectbox("📌 「成本」列", numeric_cols,
-                                          index=col_idx(cost_col, numeric_cols), key="q4_b")
+            with c1:
+                col_a = st.selectbox("📌 「收入」列", numeric_cols,
+                                     index=col_index_safe(income_col, numeric_cols), key="q4_a")
+            with c2:
+                col_b = st.selectbox("📌 「成本」列", numeric_cols,
+                                     index=col_index_safe(cost_col, numeric_cols), key="q4_b")
             new_name = st.text_input("✏️ 新列名", value="利润", key="q4_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} - {col_b}</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key="q4_b2", type="primary", use_container_width=True):
                 save_snapshot(f"利润 = {col_a} - {col_b}")
                 df[new_name] = (df[col_a] - df[col_b]).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "利润率" in scene:
             c1, c2 = st.columns(2)
-            with c1: col_a = st.selectbox("📌 「收入」列", numeric_cols,
-                                          index=col_idx(income_col, numeric_cols), key="q5_a")
-            with c2: col_b = st.selectbox("📌 「成本」列", numeric_cols,
-                                          index=col_idx(cost_col, numeric_cols), key="q5_b")
+            with c1:
+                col_a = st.selectbox("📌 「收入」列", numeric_cols,
+                                     index=col_index_safe(income_col, numeric_cols), key="q5_a")
+            with c2:
+                col_b = st.selectbox("📌 「成本」列", numeric_cols,
+                                     index=col_index_safe(cost_col, numeric_cols), key="q5_b")
             new_name = st.text_input("✏️ 新列名", value="利润率%", key="q5_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>({col_a} - {col_b}) / {col_a} × 100</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key="q5_b", type="primary", use_container_width=True):
                 save_snapshot(f"利润率 = ({col_a}-{col_b})/{col_a}*100")
                 df[new_name] = ((df[col_a] - df[col_b]) / df[col_a].replace(0, np.nan) * 100).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif scene in ["📊 两列相加", "📊 两列相减", "📊 两列相乘", "📊 两列相除"]:
             op_map = {
@@ -1495,37 +1965,42 @@ elif menu == "🧮 公式引擎":
             symbol, func = op_map[op_key]
             
             c1, c2 = st.columns(2)
-            with c1: col_a = st.selectbox("📌 列A", numeric_cols, key=f"q6_{op_key}_colA")
-            with c2: col_b = st.selectbox("📌 列B", numeric_cols, key=f"q6_{op_key}_colB")
+            with c1:
+                col_a = st.selectbox("📌 列A", numeric_cols, key=f"q6_{op_key}_colA")
+            with c2:
+                col_b = st.selectbox("📌 列B", numeric_cols, key=f"q6_{op_key}_colB")
             new_name = st.text_input("✏️ 新列名", value=f"{col_a}{symbol}{col_b}", key=f"q6_{op_key}_name")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} {symbol} {col_b}</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key=f"q6_{op_key}_btn", type="primary", use_container_width=True):
                 save_snapshot(f"{col_a} {symbol} {col_b}")
                 df[new_name] = func(df[col_a], df[col_b]).round(4)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "多列求和" in scene:
-            cols = st.multiselect("📌 选择要求和的多列", numeric_cols, key="q7_c")
+            cols_sum = st.multiselect("📌 选择要求和的多列", numeric_cols, key="q7_c")
             new_name = st.text_input("✏️ 新列名", value="合计", key="q7_n")
-            if cols:
-                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{" + ".join(cols)}</b></div>', unsafe_allow_html=True)
-            if st.button("✅ 立即生成", key="q7_b", type="primary", use_container_width=True) and cols:
-                save_snapshot(f"求和 {','.join(cols)}")
-                df[new_name] = df[cols].sum(axis=1).round(2)
+            if cols_sum:
+                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{" + ".join(cols_sum)}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q7_b", type="primary", use_container_width=True) and cols_sum:
+                save_snapshot(f"求和 {','.join(cols_sum)}")
+                df[new_name] = df[cols_sum].sum(axis=1).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "多列求平均" in scene:
-            cols = st.multiselect("📌 选择要计算平均值的多列", numeric_cols, key="q8_c")
+            cols_avg = st.multiselect("📌 选择要计算平均值的多列", numeric_cols, key="q8_c")
             new_name = st.text_input("✏️ 新列名", value="平均值", key="q8_n")
-            if cols:
-                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>({" + ".join(cols)}) ÷ {len(cols)}</b></div>', unsafe_allow_html=True)
-            if st.button("✅ 立即生成", key="q8_b", type="primary", use_container_width=True) and cols:
-                save_snapshot(f"平均 {','.join(cols)}")
-                df[new_name] = df[cols].mean(axis=1).round(2)
+            if cols_avg:
+                st.markdown(f'<div class="formula-preview">📐 计算公式: <b>({" + ".join(cols_avg)}) ÷ {len(cols_avg)}</b></div>', unsafe_allow_html=True)
+            if st.button("✅ 立即生成", key="q8_b", type="primary", use_container_width=True) and cols_avg:
+                save_snapshot(f"平均 {','.join(cols_avg)}")
+                df[new_name] = df[cols_avg].mean(axis=1).round(2)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif scene in ["🔢 某列 × 固定数字", "🔢 某列 ÷ 固定数字",
                        "🔢 某列 + 固定数字", "🔢 某列 - 固定数字"]:
@@ -1543,15 +2018,18 @@ elif menu == "🧮 公式引擎":
             symbol, func2 = op_map2[op_key2]
             
             c1, c2 = st.columns(2)
-            with c1: col = st.selectbox("📌 选择列", numeric_cols, key=f"q9_{op_key2}_col")
-            with c2: num = st.number_input("🔢 输入数字", value=1.0, key=f"q9_{op_key2}_num")
+            with c1:
+                col = st.selectbox("📌 选择列", numeric_cols, key=f"q9_{op_key2}_col")
+            with c2:
+                num = st.number_input("🔢 输入数字", value=1.0, key=f"q9_{op_key2}_num")
             new_name = st.text_input("✏️ 新列名", value=f"{col}{symbol}{num}", key=f"q9_{op_key2}_name")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col} {symbol} {num}</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key=f"q9_{op_key2}_btn", type="primary", use_container_width=True):
                 save_snapshot(f"{col} {symbol} {num}")
                 df[new_name] = func2(df[col], num).round(4)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "保留N位小数" in scene:
             col = st.selectbox("📌 选择列", numeric_cols, key="q10_c")
@@ -1562,7 +2040,8 @@ elif menu == "🧮 公式引擎":
                 save_snapshot(f"四舍五入 [{col}] {digits}位")
                 df[new_name] = df[col].round(digits)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "百分比" in scene:
             col = st.selectbox("📌 选择列", numeric_cols, key="q11_c")
@@ -1572,20 +2051,25 @@ elif menu == "🧮 公式引擎":
                 save_snapshot(f"百分比 [{col}]")
                 df[new_name] = (df[col] * 100).round(2).astype(str) + '%'
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "两列文本拼接" in scene:
             c1, c2, c3 = st.columns(3)
-            with c1: col_a = st.selectbox("📌 列A", all_cols, key="q12_a")
-            with c2: sep = st.text_input("🔗 中间分隔符", value="-", key="q12_s")
-            with c3: col_b = st.selectbox("📌 列B", all_cols, key="q12_b")
+            with c1:
+                col_a = st.selectbox("📌 列A", all_cols, key="q12_a")
+            with c2:
+                sep = st.text_input("🔗 中间分隔符", value="-", key="q12_s")
+            with c3:
+                col_b = st.selectbox("📌 列B", all_cols, key="q12_b")
             new_name = st.text_input("✏️ 新列名", value="拼接结果", key="q12_n")
             st.markdown(f'<div class="formula-preview">📐 计算公式: <b>{col_a} + "{sep}" + {col_b}</b></div>', unsafe_allow_html=True)
             if st.button("✅ 立即生成", key="q12_b2", type="primary", use_container_width=True):
                 save_snapshot(f"拼接 {col_a}+{col_b}")
                 df[new_name] = df[col_a].astype(str) + sep + df[col_b].astype(str)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "添加前缀" in scene:
             col = st.selectbox("📌 选择列", all_cols, key="q13_c")
@@ -1596,7 +2080,8 @@ elif menu == "🧮 公式引擎":
                 save_snapshot(f"前缀 {prefix} → [{col}]")
                 df[new_name] = prefix + df[col].astype(str)
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
         
         elif "添加后缀" in scene:
             col = st.selectbox("📌 选择列", all_cols, key="q14_c")
@@ -1607,9 +2092,10 @@ elif menu == "🧮 公式引擎":
                 save_snapshot(f"后缀 [{col}] + {suffix}")
                 df[new_name] = df[col].astype(str) + suffix
                 st.session_state.df = df
-                st.success(f"✅ 已生成 [{new_name}]"); st.rerun()
+                st.success(f"✅ 已生成 [{new_name}]")
+                st.rerun()
     
-    # 修复Bug 4: 公式构建器中 `t` 变量改名为 `operand_type`
+    # ============ Tab 2: 公式构建器 ============
     with t2:
         st.markdown("##### 🔧 自由组合：列 + 运算符 + 列/数字")
         st.caption("最多支持 5 个操作数组合")
@@ -1625,7 +2111,6 @@ elif menu == "🧮 公式引擎":
             st.markdown("**操作数 1**")
             c1, c2 = st.columns([1, 3])
             with c1:
-                # 修复Bug 4: t 改名为 operand_type_0
                 operand_type_0 = st.radio("类型", ["列", "数字"], key="fb_t_0", horizontal=True)
             with c2:
                 if operand_type_0 == "列":
@@ -1638,8 +2123,8 @@ elif menu == "🧮 公式引擎":
             for i in range(1, num_operands):
                 c1, c2, c3 = st.columns([1, 1, 3])
                 with c1:
-                    op = st.selectbox(f"运算符", ["+", "-", "×", "÷"], key=f"fb_op_{i}")
-                    operators.append(op)
+                    op_b = st.selectbox(f"运算符", ["+", "-", "×", "÷"], key=f"fb_op_{i}")
+                    operators.append(op_b)
                 with c2:
                     operand_type_i = st.radio(f"类型", ["列", "数字"], key=f"fb_t_{i}", horizontal=True)
                 with c3:
@@ -1651,8 +2136,8 @@ elif menu == "🧮 公式引擎":
                         operands.append(("num", v))
             
             readable = str(operands[0][1])
-            for i, op in enumerate(operators):
-                readable += f" {op} {operands[i+1][1]}"
+            for i, op_b in enumerate(operators):
+                readable += f" {op_b} {operands[i+1][1]}"
             
             st.markdown(f'<div class="formula-preview">📐 公式预览: <b>{readable}</b></div>', unsafe_allow_html=True)
             
@@ -1670,12 +2155,15 @@ elif menu == "🧮 公式引擎":
                         return df[val] if typ == "col" else val
                     
                     result = get_val(operands[0])
-                    for i, op in enumerate(operators):
+                    for i, op_b in enumerate(operators):
                         next_val = get_val(operands[i+1])
-                        if op == "+": result = result + next_val
-                        elif op == "-": result = result - next_val
-                        elif op == "×": result = result * next_val
-                        elif op == "÷":
+                        if op_b == "+":
+                            result = result + next_val
+                        elif op_b == "-":
+                            result = result - next_val
+                        elif op_b == "×":
+                            result = result * next_val
+                        elif op_b == "÷":
                             if isinstance(next_val, pd.Series):
                                 result = result / next_val.replace(0, np.nan)
                             else:
@@ -1692,6 +2180,7 @@ elif menu == "🧮 公式引擎":
                 except Exception as e:
                     st.error(friendly_error(e))
     
+    # ============ Tab 3: 常用模板 ============
     with t3:
         st.markdown("##### 📚 业务场景模板")
         
@@ -1750,11 +2239,15 @@ elif menu == "🧮 公式引擎":
                             elif tpl['type'] == "zscore":
                                 df[result_name] = ((df[vals[0]] - df[vals[0]].mean()) / df[vals[0]].std()).round(4)
                             elif tpl['type'] == "minmax":
-                                mn, mx = df[vals[0]].min(), df[vals[0]].max()
-                                df[result_name] = ((df[vals[0]] - mn) / (mx - mn)).round(4)
+                                mn_v, mx_v = df[vals[0]].min(), df[vals[0]].max()
+                                if mx_v != mn_v:
+                                    df[result_name] = ((df[vals[0]] - mn_v) / (mx_v - mn_v)).round(4)
+                                else:
+                                    df[result_name] = 0
                             elif tpl['type'] == "pct":
                                 total = df[vals[0]].sum()
-                                df[result_name] = (df[vals[0]] / total * 100).round(2).astype(str) + '%'
+                                if total != 0:
+                                    df[result_name] = (df[vals[0]] / total * 100).round(2).astype(str) + '%'
                             
                             st.session_state.df = df
                             st.success(f"✅ 已生成 [{result_name}]")
@@ -1764,6 +2257,7 @@ elif menu == "🧮 公式引擎":
                     
                     st.markdown("---")
     
+    # ============ Tab 4: 高级模式 ============
     with t4:
         st.markdown("##### 💻 高级模式：直接写 Python/Pandas 公式")
         
@@ -1805,7 +2299,7 @@ elif menu == "🧮 公式引擎":
 
 
 # ================================================================
-#                        📜 操作历史（新增）
+#                        📜 操作历史
 # ================================================================
 elif menu == "📜 操作历史":
     st.subheader("📜 操作历史（Power Query 风格）")
@@ -1832,45 +2326,182 @@ elif menu == "📜 操作历史":
 
 
 # ================================================================
-#                        💾 导出区域
+#                        💾 增强版导出区域
 # ================================================================
 st.markdown("---")
 st.markdown("### 💾 导出数据")
 
 df = st.session_state.df
 
-c1, c2, c3 = st.columns([3, 2, 2])
-with c1:
-    out_name = st.text_input("📄 文件名", value=generate_filename(), key="out_n")
-with c2:
-    out_fmt = st.selectbox("📦 格式", ["Excel (.xlsx)", "CSV (.csv)"], key="out_f")
-with c3:
-    inc_idx = st.checkbox("包含行号", False, key="out_i")
+exp_tab1, exp_tab2 = st.tabs(["⚡ 快速导出", "🎛️ 自定义导出"])
 
-export_sheets = {"处理结果": df}
-if 'pivot_table' in st.session_state:
-    export_sheets["汇总表"] = st.session_state.pivot_table
-if 'stats_table' in st.session_state:
-    export_sheets["统计概览"] = st.session_state.stats_table
-
-# 显示将导出的内容
-if len(export_sheets) > 1:
-    st.caption(f"📦 将导出 {len(export_sheets)} 个表: {', '.join(export_sheets.keys())}")
-
-if out_fmt == "Excel (.xlsx)":
-    try:
-        excel_data = df_to_excel_optimized(export_sheets, index=inc_idx)
-        st.download_button("⬇️ 下载 Excel 文件", data=excel_data,
-                           file_name=f"{out_name}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+with exp_tab1:
+    c1, c2, c3 = st.columns([3, 2, 2])
+    with c1:
+        out_name = st.text_input("📄 文件名", value=generate_filename(), key="out_n")
+    with c2:
+        out_fmt = st.selectbox("📦 格式", ["Excel (.xlsx)", "CSV (.csv)"], key="out_f")
+    with c3:
+        inc_idx = st.checkbox("包含行号", False, key="out_i")
+    
+    st.caption(f"💡 将导出全部 **{len(df):,} 行 × {len(df.columns)} 列** 数据")
+    
+    export_sheets = {"处理结果": df}
+    if 'pivot_table' in st.session_state:
+        export_sheets["汇总表"] = st.session_state.pivot_table
+    if 'stats_table' in st.session_state:
+        export_sheets["统计概览"] = st.session_state.stats_table
+    
+    if len(export_sheets) > 1:
+        st.info(f"📦 将导出 {len(export_sheets)} 个工作表: {', '.join(export_sheets.keys())}")
+    
+    if out_fmt == "Excel (.xlsx)":
+        try:
+            excel_data = df_to_excel_optimized(export_sheets, index=inc_idx)
+            st.download_button("⬇️ 下载 Excel 文件", data=excel_data,
+                               file_name=f"{out_name}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               type="primary", use_container_width=True)
+        except Exception as e:
+            st.error(friendly_error(e))
+    else:
+        csv = df.to_csv(index=inc_idx).encode('utf-8-sig')
+        st.download_button("⬇️ 下载 CSV 文件", data=csv,
+                           file_name=f"{out_name}.csv", mime="text/csv",
                            type="primary", use_container_width=True)
-    except Exception as e:
-        st.error(friendly_error(e))
-else:
-    csv = df.to_csv(index=inc_idx).encode('utf-8-sig')
-    st.download_button("⬇️ 下载 CSV 文件", data=csv,
-                       file_name=f"{out_name}.csv", mime="text/csv",
-                       type="primary", use_container_width=True)
 
-with st.expander(f"👁️ 预览导出数据（{len(df):,}行 × {len(df.columns)}列）"):
-    st.dataframe(df.head(200), use_container_width=True, height=300)
+
+with exp_tab2:
+    st.markdown("##### 🎛️ 自定义导出范围")
+    
+    # 选择列
+    st.markdown("**1️⃣ 选择要导出的列**")
+    col_select_mode = st.radio(
+        "列选择方式",
+        ["导出全部列", "只导出选中的列", "排除指定列"],
+        horizontal=True, key="col_mode"
+    )
+    
+    if col_select_mode == "只导出选中的列":
+        export_cols = st.multiselect(
+            "选择要导出的列",
+            df.columns.tolist(),
+            default=df.columns.tolist(),
+            key="exp_cols"
+        )
+    elif col_select_mode == "排除指定列":
+        exclude_cols = st.multiselect("选择要排除的列", df.columns.tolist(), key="exc_cols")
+        export_cols = [c for c in df.columns if c not in exclude_cols]
+    else:
+        export_cols = df.columns.tolist()
+    
+    if not export_cols:
+        st.warning("⚠️ 请至少选择一列")
+        export_cols = df.columns.tolist()
+    
+    st.caption(f"✅ 将导出 **{len(export_cols)}** 列")
+    
+    # 选择行
+    st.markdown("**2️⃣ 选择要导出的行**")
+    row_select_mode = st.radio(
+        "行选择方式",
+        ["导出全部行", "只导出前N行", "只导出后N行", "导出指定行范围", "按条件筛选导出"],
+        horizontal=True, key="row_mode"
+    )
+    
+    export_df_preview = df[export_cols].copy()
+    
+    if row_select_mode == "只导出前N行":
+        n_rows = st.number_input("导出前 N 行", 1, len(df), min(100, len(df)), key="head_n")
+        export_df_preview = export_df_preview.head(int(n_rows))
+    elif row_select_mode == "只导出后N行":
+        n_rows = st.number_input("导出后 N 行", 1, len(df), min(100, len(df)), key="tail_n")
+        export_df_preview = export_df_preview.tail(int(n_rows))
+    elif row_select_mode == "导出指定行范围":
+        c1, c2 = st.columns(2)
+        with c1:
+            start_row = st.number_input("从第几行开始（1=第1行）", 1, len(df), 1, key="rng_s")
+        with c2:
+            end_row = st.number_input("到第几行结束", 1, len(df), min(100, len(df)), key="rng_e")
+        if start_row <= end_row:
+            export_df_preview = export_df_preview.iloc[int(start_row)-1:int(end_row)]
+        else:
+            st.error("起始行不能大于结束行")
+    elif row_select_mode == "按条件筛选导出":
+        filter_col = st.selectbox("筛选列", df.columns.tolist(), key="exp_fil_c")
+        if pd.api.types.is_numeric_dtype(df[filter_col]):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fop = st.selectbox("条件", [">", ">=", "<", "<=", "==", "!=", "范围"], key="exp_fop")
+            
+            if fop == "范围":
+                with c2:
+                    fmin = st.number_input("最小", value=float(df[filter_col].min()), key="exp_fmin")
+                with c3:
+                    fmax = st.number_input("最大", value=float(df[filter_col].max()), key="exp_fmax")
+                export_df_preview = export_df_preview[
+                    (df[filter_col] >= fmin) & (df[filter_col] <= fmax)
+                ]
+            else:
+                with c2:
+                    fval = st.number_input("值", value=0.0, key="exp_fval")
+                fmap = {">": df[filter_col] > fval, ">=": df[filter_col] >= fval,
+                        "<": df[filter_col] < fval, "<=": df[filter_col] <= fval,
+                        "==": df[filter_col] == fval, "!=": df[filter_col] != fval}
+                export_df_preview = export_df_preview[fmap[fop]]
+        else:
+            unique_vals = df[filter_col].dropna().unique().tolist()
+            sel_vals = st.multiselect("选择值", unique_vals, default=unique_vals, key="exp_sel")
+            if sel_vals:
+                export_df_preview = export_df_preview[df[filter_col].isin(sel_vals)]
+    
+    st.caption(f"✅ 将导出 **{len(export_df_preview):,}** 行 × **{len(export_df_preview.columns)}** 列")
+    
+    with st.expander("👁️ 预览将要导出的数据（前20行）", expanded=True):
+        if len(export_df_preview) > 0:
+            st.dataframe(export_df_preview.head(20), use_container_width=True, height=250)
+        else:
+            st.warning("⚠️ 当前筛选条件下没有数据")
+    
+    with st.expander("⚙️ 高级选项"):
+        c1, c2 = st.columns(2)
+        with c1:
+            cus_name = st.text_input("文件名", value=generate_filename("自定义导出"), key="cus_name")
+            cus_fmt = st.selectbox("格式", ["Excel (.xlsx)", "CSV (.csv)"], key="cus_fmt")
+        with c2:
+            cus_idx = st.checkbox("包含行号", False, key="cus_idx")
+            cus_split = st.checkbox("超过1万行时按工作表拆分（仅Excel）", False, key="cus_split")
+    
+    if len(export_df_preview) > 0:
+        if cus_fmt == "Excel (.xlsx)":
+            try:
+                if cus_split and len(export_df_preview) > 10000:
+                    chunk_size = 10000
+                    chunks = {}
+                    for i in range(0, len(export_df_preview), chunk_size):
+                        chunk_name = f"第{i//chunk_size + 1}部分_{i+1}-{min(i+chunk_size, len(export_df_preview))}"
+                        chunks[chunk_name] = export_df_preview.iloc[i:i+chunk_size]
+                    excel_data = df_to_excel_optimized(chunks, index=cus_idx)
+                    st.info(f"📦 已拆分为 {len(chunks)} 个工作表")
+                else:
+                    excel_data = df_to_excel_optimized({"导出数据": export_df_preview}, index=cus_idx)
+                
+                st.download_button(
+                    f"⬇️ 下载 {len(export_df_preview):,} 行数据 (Excel)",
+                    data=excel_data,
+                    file_name=f"{cus_name}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary", use_container_width=True
+                )
+            except Exception as e:
+                st.error(friendly_error(e))
+        else:
+            csv = export_df_preview.to_csv(index=cus_idx).encode('utf-8-sig')
+            st.download_button(
+                f"⬇️ 下载 {len(export_df_preview):,} 行数据 (CSV)",
+                data=csv,
+                file_name=f"{cus_name}.csv", mime="text/csv",
+                type="primary", use_container_width=True
+            )
+    else:
+        st.warning("⚠️ 没有数据可导出，请调整筛选条件")
