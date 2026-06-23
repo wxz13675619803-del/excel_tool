@@ -21,6 +21,11 @@ from utils.ai_helper import (
     ai_insight, ai_chat_to_code, ai_explain_result,
     safe_exec_pandas_code, get_ai_client
 )
+from utils.state_manager import (
+    init_session, save_snapshot, undo, redo,
+    is_large_data, estimate_memory_mb, on_page_change,
+    LARGE_DATA_THRESHOLD
+)
 
 # ======================== 页面配置 ========================
 st.set_page_config(
@@ -36,58 +41,23 @@ if os.path.exists(css_path):
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # ======================== Session State ========================
-defaults = {
-    'df': None, 'original_df': None, 'sheets': {},
-    'current_sheet': None,
-    'history': [], 'redo_stack': [], 'op_log': [],
-    'last_file_hash': None,
-    'new_cols': [],
-    # 新增
-    'ai_insight_cache': {},      # AI洞察缓存
-    'ai_chat_history': [],        # AI对话历史
-    'recipe': [],                 # 操作录制
-    'recording': False,           # 是否正在录制
-    # 宽表优化相关
-    'file_complete': True,
-    'sheet_meta': {},
-    'total_cols': 0,
-    'partial_load': False,
-    'display_cols': [],
-    'data_page_cols': [],
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+init_session()
 
 
 # ======================== 工具函数 ========================
 def save_snapshot(desc=""):
-    if st.session_state.df is not None:
-        st.session_state.history.append(st.session_state.df.copy())
-        if len(st.session_state.history) > 30:
-            st.session_state.history.pop(0)
-        st.session_state.redo_stack = []
-        if desc:
-            st.session_state.op_log.append({
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "desc": desc
-            })
+    from utils.state_manager import save_snapshot as _save
+    _save(desc)
 
 
 def undo():
-    if st.session_state.history:
-        st.session_state.redo_stack.append(st.session_state.df.copy())
-        st.session_state.df = st.session_state.history.pop()
-        if st.session_state.op_log:
-            st.session_state.op_log.pop()
-        st.rerun()
+    from utils.state_manager import undo as _undo
+    _undo()
 
 
 def redo():
-    if st.session_state.redo_stack:
-        st.session_state.history.append(st.session_state.df.copy())
-        st.session_state.df = st.session_state.redo_stack.pop()
-        st.rerun()
+    from utils.state_manager import redo as _redo
+    _redo()
 
 
 def mark_new_col(col_name):
@@ -118,36 +88,11 @@ def friendly_error(e):
 
 
 def show_data_preview(df, title="📋 实时数据预览"):
-    """底部固定数据预览区（支持宽表优化）"""
+    """底部固定数据预览区（核心改进：操作后立刻看到结果）"""
     st.markdown("---")
     
-    all_cols = df.columns.tolist()
-    max_display_cols = 50
-    
-    if len(all_cols) > max_display_cols:
-        if 'display_cols' not in st.session_state:
-            st.session_state.display_cols = all_cols[:max_display_cols]
-        
-        display_cols = st.session_state.display_cols
-        col_sel, col_btn = st.columns([4, 1])
-        with col_sel:
-            selected_cols = st.multiselect(
-                f"选择显示列（共{len(all_cols)}列）",
-                all_cols,
-                default=display_cols,
-                key="preview_cols"
-            )
-        with col_btn:
-            if st.button("🔄 应用", use_container_width=True):
-                st.session_state.display_cols = selected_cols
-                st.rerun()
-        
-        df_display = df[selected_cols]
-    else:
-        df_display = df
-        selected_cols = all_cols
-    
-    new_cols_set = set(st.session_state.new_cols) & set(df_display.columns)
+    # 高亮显示新列
+    new_cols_set = set(st.session_state.new_cols) & set(df.columns)
     
     col_t, col_n = st.columns([3, 1])
     with col_t:
@@ -161,6 +106,7 @@ def show_data_preview(df, title="📋 实时数据预览"):
                               key=f"prev_n_{st.session_state.get('menu_key','')}", 
                               label_visibility="collapsed")
     
+    # 快捷工具栏
     st.markdown("**⚡ 快捷操作：**")
     quick_btns = st.columns([2, 2, 2, 2, 2, 2])
     with quick_btns[0]:
@@ -189,12 +135,12 @@ def show_data_preview(df, title="📋 实时数据预览"):
             st.toast("✅ 已清理")
             st.rerun()
     with quick_btns[3]:
-        csv = df_display.to_csv(index=False).encode('utf-8-sig')
+        csv = df.to_csv(index=False).encode('utf-8-sig')
         st.download_button("📥 CSV", csv,
                           file_name=f"数据_{datetime.now().strftime('%H%M%S')}.csv",
                           mime="text/csv", use_container_width=True, key=f"dl_csv")
     with quick_btns[4]:
-        output = df_to_excel_optimized({"Sheet1": df_display})
+        output = df_to_excel_optimized({"Sheet1": df})
         st.download_button("📥 Excel", output,
                           file_name=f"数据_{datetime.now().strftime('%H%M%S')}.xlsx",
                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -204,17 +150,18 @@ def show_data_preview(df, title="📋 实时数据预览"):
             st.session_state.new_cols = []
             st.rerun()
     
+    # 显示数据，新列加样式
     if new_cols_set:
         def highlight_new(s):
             return ['background-color: rgba(108,99,255,0.15); font-weight:600' 
                     if s.name in new_cols_set else '' for _ in s]
         try:
-            styled = df_display.head(n_show).style.apply(highlight_new, axis=0)
+            styled = df.head(n_show).style.apply(highlight_new, axis=0)
             st.dataframe(styled, use_container_width=True, height=350)
         except:
-            st.dataframe(df_display.head(n_show), use_container_width=True, height=350)
+            st.dataframe(df.head(n_show), use_container_width=True, height=350)
     else:
-        st.dataframe(df_display.head(n_show), use_container_width=True, height=350)
+        st.dataframe(df.head(n_show), use_container_width=True, height=350)
 
 
 # ======================== 侧边栏 ========================
@@ -243,6 +190,7 @@ with st.sidebar:
         
         with st.spinner("读取中..."):
             try:
+                # 大数据量提示
                 file_size_mb = len(file_bytes) / (1024 * 1024)
                 if file_size_mb > 10:
                     st.warning(f"⚠️ 文件较大 ({file_size_mb:.1f} MB)，正在进行懒加载...")
@@ -250,11 +198,10 @@ with st.sidebar:
                         file_bytes, uploaded_file.name, max_rows=20000
                     )
                 else:
-                    st.session_state.sheets = load_excel_cached(file_bytes, uploaded_file.name, max_cols=200)
+                    st.session_state.sheets = load_excel_cached(file_bytes, uploaded_file.name)
                     st.session_state.file_complete = True
                 
-                meta = st.session_state.sheets.get('__meta__', {})
-                sheet_names = [s for s in st.session_state.sheets.keys() if s != '__meta__']
+                sheet_names = list(st.session_state.sheets.keys())
                 
                 if len(sheet_names) > 1:
                     selected_sheet = st.selectbox("工作表", sheet_names)
@@ -264,24 +211,16 @@ with st.sidebar:
                 if selected_sheet != st.session_state.current_sheet:
                     st.session_state.current_sheet = selected_sheet
                     raw_df = st.session_state.sheets[selected_sheet].copy()
-                    
-                    sheet_meta = meta.get(selected_sheet, {})
-                    st.session_state.sheet_meta = sheet_meta
-                    st.session_state.total_cols = sheet_meta.get('total_cols', len(raw_df.columns))
-                    st.session_state.partial_load = sheet_meta.get('partial_load', False)
-                    
-                    if len(raw_df.columns) <= 200:
+                    if len(raw_df) > 5000:
                         raw_df = optimize_dtypes(raw_df)
                     st.session_state.df = raw_df
                     st.session_state.original_df = raw_df.copy()
                     st.session_state.history = []
                     st.session_state.new_cols = []
                 
-                if st.session_state.partial_load:
-                    st.warning(f"⚠️ 宽表优化：文件共有 {st.session_state.total_cols} 列，仅加载前200列预览。请在数据页面选择需要处理的列。")
-                
+                # 文件未完整加载提示
                 if not st.session_state.file_complete:
-                    st.info("💡 文件过大，仅加载了前20000行进行预览。")
+                    st.info("💡 文件过大，仅加载了前20000行进行预览。如需处理全部数据，请使用较小的文件或在本地运行。")
             except Exception as e:
                 st.error(friendly_error(e))
     
@@ -293,6 +232,9 @@ with st.sidebar:
             st.metric("行", f"{len(df_sb):,}")
         with c2:
             st.metric("列", f"{len(df_sb.columns)}")
+        # 大数据模式提示
+        if len(df_sb) > LARGE_DATA_THRESHOLD:
+            st.warning(f"⚡ 大数据模式（>{LARGE_DATA_THRESHOLD//10000}万行）\n撤销历史已禁用以节省内存")
     
     st.markdown("---")
     
@@ -309,6 +251,17 @@ with st.sidebar:
     label_visibility="collapsed"
     )
     st.session_state['menu_key'] = menu
+
+    # 切页时清理临时缓存，释放内存
+    prev_menu = st.session_state.get("_prev_menu")
+    if prev_menu and prev_menu != menu:
+        on_page_change()
+    st.session_state["_prev_menu"] = menu
+
+    # 内存用量显示（大数据模式下）
+    mem_mb = estimate_memory_mb()
+    if mem_mb > 200:
+        st.caption(f"💾 当前内存占用约 {mem_mb:.0f} MB")
     
     st.markdown("---")
     
@@ -702,79 +655,46 @@ if menu == "🏠 数据":
     dt1, dt2 = st.tabs(["📊 数据视图", "🎨 条件格式"])
     
     with dt1:
-        # 宽表列选择
-        all_cols = df.columns.tolist()
-        if len(all_cols) > 50:
-            st.warning(f"⚠️ 检测到宽表（{len(all_cols)}列），已启用列选择模式")
-            
-            if 'data_page_cols' not in st.session_state:
-                st.session_state.data_page_cols = all_cols[:50]
-            
-            col_sel, col_btn = st.columns([4, 1])
-            with col_sel:
-                selected_cols = st.multiselect(
-                    f"选择处理列（共{len(all_cols)}列）",
-                    all_cols,
-                    default=st.session_state.data_page_cols,
-                    key="data_cols"
-                )
-            with col_btn:
-                if st.button("🔄 应用", use_container_width=True):
-                    st.session_state.data_page_cols = selected_cols
-                    st.rerun()
-            
-            df_display = df[selected_cols]
-        else:
-            df_display = df
-            selected_cols = all_cols
-        
-        # 数据质量检测报告（仅对显示列进行检测）
+        # 数据质量检测报告
         with st.expander("🔍 数据质量检测报告", expanded=True):
-            if len(selected_cols) <= 100:
-                quality = detect_data_quality(df_display)
-                stats = quality["stats"]
-                
-                c1, c2, c3, c4, c5 = st.columns(5)
-                with c1:
-                    st.metric("总行数", f"{stats['rows']:,}")
-                with c2:
-                    st.metric("总列数", stats['columns'])
-                with c3:
-                    st.metric("总单元格", f"{stats['total_cells']:,}")
-                with c4:
-                    st.metric("缺失单元格", f"{stats['missing_cells']:,}")
-                with c5:
-                    st.metric("缺失率", f"{stats['missing_rate']}%")
-                
-                if quality["errors"]:
-                    st.error(f"❌ 发现 {len(quality['errors'])} 个严重问题：")
-                    for e in quality["errors"]:
-                        st.markdown(f"- {e}")
-                
-                if quality["warnings"]:
-                    st.warning(f"⚠️ 发现 {len(quality['warnings'])} 个警告：")
-                    for w in quality["warnings"]:
-                        st.markdown(f"- {w}")
-                
-                if quality["suggestions"]:
-                    st.info(f"💡 建议操作：")
-                    for s in quality["suggestions"]:
-                        st.markdown(f"- {s}")
-                
-                if not quality["errors"] and not quality["warnings"] and not quality["suggestions"]:
-                    st.success("🎉 数据质量良好，未发现问题")
-            else:
-                st.info(f"📊 当前选择 {len(selected_cols)} 列，为优化性能，数据质量检测仅显示基本统计：")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric("总行数", f"{len(df_display):,}")
-                    st.metric("总列数", len(df_display.columns))
-                with c2:
-                    st.metric("缺失单元格", f"{int(df_display.isna().sum().sum()):,}")
-                    st.metric("缺失率", f"{round(df_display.isna().sum().sum() / (len(df_display) * len(df_display.columns)) * 100, 2)}%")
+            quality = detect_data_quality(df)
+            stats = quality["stats"]
+            
+            # 基本统计指标
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("总行数", f"{stats['rows']:,}")
+            with c2:
+                st.metric("总列数", stats['columns'])
+            with c3:
+                st.metric("总单元格", f"{stats['total_cells']:,}")
+            with c4:
+                st.metric("缺失单元格", f"{stats['missing_cells']:,}")
+            with c5:
+                st.metric("缺失率", f"{stats['missing_rate']}%")
+            
+            # 问题提示
+            if quality["errors"]:
+                st.error(f"❌ 发现 {len(quality['errors'])} 个严重问题：")
+                for e in quality["errors"]:
+                    st.markdown(f"- {e}")
+            
+            if quality["warnings"]:
+                st.warning(f"⚠️ 发现 {len(quality['warnings'])} 个警告：")
+                for w in quality["warnings"]:
+                    st.markdown(f"- {w}")
+            
+            if quality["suggestions"]:
+                st.info(f"💡 建议操作：")
+                for s in quality["suggestions"]:
+                    st.markdown(f"- {s}")
+            
+            if not quality["errors"] and not quality["warnings"] and not quality["suggestions"]:
+                st.success("🎉 数据质量良好，未发现问题")
         
         st.markdown("---")
         
+        # 快捷操作
         qc1, qc2, qc3, qc4 = st.columns(4)
         with qc1:
             if st.button("🗑️ 删除空行", use_container_width=True):
@@ -795,7 +715,6 @@ if menu == "🏠 数据":
         with qc3:
             if st.button("✂️ 去除空格", use_container_width=True):
                 save_snapshot("去空格")
-                text_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
                 for c in text_cols:
                     df[c] = df[c].astype(str).str.strip()
                 st.session_state.df = df
@@ -808,30 +727,20 @@ if menu == "🏠 数据":
         
         st.markdown("---")
         
-        # 可编辑表格（仅显示选择的列）
-        edited = st.data_editor(df_display, use_container_width=True, num_rows="dynamic", 
+        # 可编辑表格
+        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", 
                                 height=500, key="main_editor")
         
-        if not edited.equals(df_display):
+        if not edited.equals(df):
             if st.button("💾 保存修改", type="primary"):
                 save_snapshot("编辑数据")
-                df[selected_cols] = edited.values
-                st.session_state.df = df
+                st.session_state.df = edited
                 st.toast("✅ 已保存")
                 st.rerun()
     
     # ===== 条件格式 =====
     with dt2:
         st.markdown("##### 🎨 条件格式设置")
-        
-        # 宽表优化：限制显示列数
-        if len(all_cols) > 50:
-            st.info("💡 宽表模式：条件格式预览仅显示前50列")
-            preview_df = df[all_cols[:50]]
-            numeric_cols_preview = preview_df.select_dtypes(include='number').columns.tolist()
-        else:
-            preview_df = df
-            numeric_cols_preview = numeric_cols
         
         format_type = st.radio("格式类型", 
             ["📊 色阶（数值列）", "🏷️ 图标集", "🎯 自定义条件", "🔔 高亮重复值"],
@@ -840,7 +749,7 @@ if menu == "🏠 数据":
         st.markdown("---")
         
         if format_type == "📊 色阶（数值列）":
-            col = st.selectbox("选择数值列", numeric_cols_preview, key="cf_col")
+            col = st.selectbox("选择数值列", numeric_cols, key="cf_col")
             c1, c2 = st.columns(2)
             with c1:
                 min_color = st.color_picker("最小值颜色", "#eff6ff", key="cf_min")
@@ -863,13 +772,13 @@ if menu == "🏠 数据":
                         b = int(int(min_color[5:7], 16) * (1-ratio) + int(max_color[5:7], 16) * ratio)
                         return f'background-color: rgb({r},{g},{b})'
                     
-                    styled = preview_df.style.applymap(color_scale, subset=[col])
+                    styled = df.style.applymap(color_scale, subset=[col])
                     st.dataframe(styled, use_container_width=True, height=500)
                 except Exception as e:
                     st.error(friendly_error(e))
         
         elif format_type == "🏷️ 图标集":
-            col = st.selectbox("选择数值列", numeric_cols_preview, key="icon_col")
+            col = st.selectbox("选择数值列", numeric_cols, key="icon_col")
             icon_type = st.selectbox("图标类型", ["🏆 奖牌", "📈 箭头", "🔴🟡🟢 红绿灯"], key="icon_type")
             
             if st.button("✅ 应用图标", type="primary", key="icon_b"):
@@ -916,7 +825,7 @@ if menu == "🏠 数据":
         elif format_type == "🎯 自定义条件":
             c1, c2 = st.columns(2)
             with c1:
-                cond_col = st.selectbox("选择列", preview_df.columns.tolist(), key="cond_col")
+                cond_col = st.selectbox("选择列", all_cols, key="cond_col")
             with c2:
                 cond_op = st.selectbox("条件", [">", ">=", "<", "<=", "==", "!=", "包含", "为空"], key="cond_op")
             
@@ -951,13 +860,13 @@ if menu == "🏠 数据":
                             return f'background-color: {highlight_color}'
                         return ''
                     
-                    styled = preview_df.style.apply(lambda x: [highlight_cell(x.iloc[i], i) for i in range(len(x))], axis=1)
+                    styled = df.style.apply(lambda x: [highlight_cell(x.iloc[i], i) for i in range(len(x))], axis=1)
                     st.dataframe(styled, use_container_width=True, height=500)
                 except Exception as e:
                     st.error(friendly_error(e))
         
         elif format_type == "🔔 高亮重复值":
-            cols = st.multiselect("选择判重列（留空=所有列）", preview_df.columns.tolist(), key="dup_cols")
+            cols = st.multiselect("选择判重列（留空=所有列）", all_cols, key="dup_cols")
             dup_color = st.color_picker("高亮颜色", "#fef3c7", key="dup_color")
             
             if st.button("✅ 高亮重复", type="primary", key="dup_b"):
@@ -970,7 +879,7 @@ if menu == "🏠 数据":
                             return f'background-color: {dup_color}'
                         return ''
                     
-                    styled = preview_df.style.apply(lambda x: [highlight_dup(x.iloc[i], i) for i in range(len(x))], axis=1)
+                    styled = df.style.apply(lambda x: [highlight_dup(x.iloc[i], i) for i in range(len(x))], axis=1)
                     st.dataframe(styled, use_container_width=True, height=500)
                 except Exception as e:
                     st.error(friendly_error(e))

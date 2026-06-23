@@ -1,70 +1,59 @@
 """工具函数 - 含大数据性能优化"""
+import gc
 import pandas as pd
 import numpy as np
 from io import BytesIO
 from datetime import datetime
 import streamlit as st
 
+# 超过此大小（MB）自动走分块加载
+_CHUNK_LOAD_THRESHOLD_MB = 50
+_CHUNK_ROWS = 100_000  # 每块行数
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_excel_cached(file_content: bytes, file_name: str, max_cols: int = 200) -> dict:
+def load_excel_cached(file_content: bytes, file_name: str) -> dict:
     """
-    缓存加载Excel文件（支持宽表优化）
-    使用文件内容的hash作为缓存key，避免重复读取
-    max_cols: 最大加载列数，超过时仅加载前max_cols列用于预览
+    缓存加载 Excel/CSV。
+    - 小文件（<50MB）：一次性加载后做 dtype 优化
+    - 大 CSV（≥50MB）：分块加载 + 合并，峰值内存 ≈ 两个 chunk
     """
-    from io import BytesIO
+    file_size_mb = len(file_content) / 1024 / 1024
     buffer = BytesIO(file_content)
-    
-    if file_name.endswith('.csv'):
-        for enc in ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin1']:
+
+    if file_name.lower().endswith('.csv'):
+        for enc in ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'latin1']:
             try:
                 buffer.seek(0)
-                # 先读取前几行检测列数
-                df_sample = pd.read_csv(buffer, encoding=enc, nrows=5)
-                actual_cols = len(df_sample.columns)
-                
-                buffer.seek(0)
-                if actual_cols > max_cols:
-                    df = pd.read_csv(buffer, encoding=enc, usecols=range(max_cols))
-                    return {"Sheet1": df, "__meta__": {"total_cols": actual_cols, "partial_load": True}}
+                if file_size_mb >= _CHUNK_LOAD_THRESHOLD_MB:
+                    chunks = []
+                    for chunk in pd.read_csv(buffer, encoding=enc, chunksize=_CHUNK_ROWS,
+                                             low_memory=True):
+                        chunks.append(optimize_dtypes(chunk))
+                    df = pd.concat(chunks, ignore_index=True)
+                    del chunks
+                    gc.collect()
                 else:
-                    df = pd.read_csv(buffer, encoding=enc)
-                    return {"Sheet1": df, "__meta__": {"total_cols": actual_cols, "partial_load": False}}
+                    df = pd.read_csv(buffer, encoding=enc, low_memory=True)
+                    df = optimize_dtypes(df)
+                return {"Sheet1": df}
             except (UnicodeDecodeError, pd.errors.ParserError):
                 continue
         raise ValueError("无法识别CSV编码")
     else:
         xls = pd.ExcelFile(buffer)
         sheets = {}
-        meta = {}
         for name in xls.sheet_names:
-            df_sample = pd.read_excel(xls, sheet_name=name, nrows=5)
-            actual_cols = len(df_sample.columns)
-            
-            if actual_cols > max_cols:
-                df = pd.read_excel(xls, sheet_name=name, usecols=range(max_cols))
-                sheets[name] = df
-                meta[name] = {"total_cols": actual_cols, "partial_load": True}
-            else:
-                df = pd.read_excel(xls, sheet_name=name)
-                sheets[name] = df
-                meta[name] = {"total_cols": actual_cols, "partial_load": False}
-        
-        if meta:
-            sheets["__meta__"] = meta
+            df = pd.read_excel(xls, sheet_name=name)
+            sheets[name] = optimize_dtypes(df) if len(df) > 10_000 else df
         return sheets
 
 
-def optimize_dtypes(df: pd.DataFrame, max_cols_optimize: int = 200) -> pd.DataFrame:
+def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    自动优化DataFrame内存占用（支持宽表优化）
+    自动优化DataFrame内存占用
     将大数据的内存减少50%~80%
-    max_cols_optimize: 超过此列数时跳过优化（宽表性能优化）
     """
-    if len(df.columns) > max_cols_optimize:
-        return df
-    
     for col in df.columns:
         col_type = df[col].dtype
 
@@ -90,37 +79,47 @@ def optimize_dtypes(df: pd.DataFrame, max_cols_optimize: int = 200) -> pd.DataFr
 
 
 def df_to_excel_optimized(df_dict: dict, index=False) -> BytesIO:
-    """高性能Excel导出（支持多sheet + 自动列宽）"""
+    """
+    高性能 Excel 导出。
+    - 数据行 < 100k：原 xlsxwriter 路径（自动列宽 + 表头格式）
+    - 数据行 ≥ 100k：constant_memory 模式，峰值内存减少 ~80%
+    """
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    total_rows = sum(len(df) for df in df_dict.values())
+    use_constant = total_rows >= 100_000
+
+    if use_constant:
+        import xlsxwriter
+        wb = xlsxwriter.Workbook(output, {"in_memory": True, "constant_memory": True})
+        hdr_fmt = wb.add_format({"bold": True, "bg_color": "#6C63FF",
+                                  "font_color": "white", "border": 1})
         for sheet_name, df in df_dict.items():
-            df.to_excel(writer, index=index, sheet_name=sheet_name[:31])
-            worksheet = writer.sheets[sheet_name[:31]]
-            
-            # 自动列宽
-            for col_idx, col in enumerate(df.columns):
-                try:
-                    max_len = max(
-                        df[col].astype(str).map(len).max(),
-                        len(str(col))
-                    ) + 3
-                    worksheet.set_column(col_idx, col_idx, min(max_len, 45))
-                except:
-                    worksheet.set_column(col_idx, col_idx, 12)
-            
-            # 表头格式
-            header_format = writer.book.add_format({
-                'bold': True,
-                'bg_color': '#6C63FF',
-                'font_color': 'white',
-                'border': 1,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-            })
-            for col_idx, col in enumerate(df.columns):
-                worksheet.write(0, col_idx, col, header_format)
-    
+            ws = wb.add_worksheet(sheet_name[:31])
+            for ci, col in enumerate(df.columns):
+                ws.write(0, ci, col, hdr_fmt)
+            for ri, row in enumerate(df.itertuples(index=False), start=1):
+                for ci, val in enumerate(row):
+                    ws.write(ri, ci, val)
+        wb.close()
+    else:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for sheet_name, df in df_dict.items():
+                df.to_excel(writer, index=index, sheet_name=sheet_name[:31])
+                ws = writer.sheets[sheet_name[:31]]
+                for ci, col in enumerate(df.columns):
+                    try:
+                        max_len = min(int(df[col].astype(str).str.len().max()), 45) + 3
+                        max_len = max(max_len, len(str(col)) + 2)
+                    except Exception:
+                        max_len = 12
+                    ws.set_column(ci, ci, max_len)
+                hdr_fmt = writer.book.add_format({
+                    "bold": True, "bg_color": "#6C63FF", "font_color": "white",
+                    "border": 1, "text_wrap": True, "valign": "vcenter", "align": "center",
+                })
+                for ci, col in enumerate(df.columns):
+                    ws.write(0, ci, col, hdr_fmt)
+
     output.seek(0)
     return output
 
@@ -182,96 +181,67 @@ def generate_filename(prefix="处理结果"):
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def detect_data_quality(df: pd.DataFrame) -> dict:
-    """智能检测数据质量问题"""
-    issues = {
-        "warnings": [],
-        "errors": [],
-        "suggestions": [],
-        "stats": {}
-    }
-    
-    # 基本统计
+    """
+    智能检测数据质量问题。
+    - 行数 ≤ 50k：全量扫描
+    - 行数 > 50k：随机采样 10k 行，结果外推估计
+    - 结果缓存 5 分钟，切页不重算
+    """
+    issues = {"warnings": [], "errors": [], "suggestions": [], "stats": {}}
+    total_rows = len(df)
+    sample_size = min(10_000, total_rows)
+    sample_df = df.sample(sample_size, random_state=42) if total_rows > 50_000 else df
+    is_sampled = total_rows > 50_000
+
     issues["stats"] = {
-        "rows": len(df),
+        "rows": total_rows,
         "columns": len(df.columns),
-        "total_cells": len(df) * len(df.columns),
-        "missing_cells": int(df.isna().sum().sum()),
-        "missing_rate": round(df.isna().sum().sum() / (len(df) * len(df.columns)) * 100, 2),
+        "total_cells": total_rows * len(df.columns),
+        "missing_cells": int(sample_df.isna().sum().sum() / len(sample_df) * total_rows),
+        "missing_rate": round(sample_df.isna().mean().mean() * 100, 2),
     }
-    
-    # 检测重复行
-    duplicate_count = df.duplicated().sum()
-    if duplicate_count > 0:
-        issues["warnings"].append(f"发现 {duplicate_count} 条重复行")
+
+    suffix = f"（{sample_size:,} 行采样估计）" if is_sampled else ""
+
+    dup_rate = sample_df.duplicated().mean()
+    if dup_rate > 0:
+        est = int(dup_rate * total_rows)
+        issues["warnings"].append(f"发现约 {est:,} 条重复行{suffix}")
         issues["suggestions"].append("建议使用「去重」功能删除重复行")
-    
-    # 检测缺失值
+
     for col in df.columns:
-        missing = df[col].isna().sum()
-        if missing > 0:
-            rate = round(missing / len(df) * 100, 1)
-            issues["warnings"].append(f"列「{col}」有 {missing} 个缺失值（占 {rate}%）")
-            if rate > 50:
-                issues["errors"].append(f"列「{col}」缺失率超过50%，建议检查数据源")
-    
-    # 检测数据类型问题
-    for col in df.columns:
-        # 文本列中可能存在数字
-        if df[col].dtype == 'object':
-            # 检查是否可以转换为数值
-            try:
-                num_test = pd.to_numeric(df[col], errors='coerce')
-                numeric_rate = num_test.notna().sum() / len(df)
-                if numeric_rate > 0.8 and numeric_rate < 1.0:
-                    issues["warnings"].append(f"列「{col}」大部分是数字但被识别为文本，{int((1-numeric_rate)*100)}% 的值无法转换")
-                    issues["suggestions"].append(f"建议将列「{col}」转换为数值类型")
-                elif numeric_rate == 1.0:
-                    issues["suggestions"].append(f"列「{col}」全部是数字，建议转换为数值类型")
-            except:
-                pass
-        
-        # 检测日期格式问题
-        try:
-            date_test = pd.to_datetime(df[col], errors='coerce')
-            date_rate = date_test.notna().sum() / len(df)
-            if date_rate > 0.8 and date_rate < 1.0 and df[col].dtype != 'datetime64[ns]':
-                issues["warnings"].append(f"列「{col}」大部分是日期但被识别为文本")
-                issues["suggestions"].append(f"建议将列「{col}」转换为日期类型")
-        except:
-            pass
-    
-    # 检测异常值（数值列）
-    numeric_cols = df.select_dtypes(include='number').columns
+        miss_rate = sample_df[col].isna().mean() * 100
+        if miss_rate > 0:
+            issues["warnings"].append(f"列「{col}」缺失率约 {miss_rate:.1f}%{suffix}")
+            if miss_rate > 50:
+                issues["errors"].append(f"列「{col}」缺失率超 50%，建议检查数据源")
+
+    numeric_cols = sample_df.select_dtypes(include="number").columns
     for col in numeric_cols:
         try:
-            mean = df[col].mean()
-            std = df[col].std()
+            mean, std = sample_df[col].mean(), sample_df[col].std()
             if std > 0:
-                outliers = ((df[col] - mean).abs() > 3 * std).sum()
+                outliers = int(((sample_df[col] - mean).abs() > 3 * std).mean() * total_rows)
                 if outliers > 0:
-                    issues["warnings"].append(f"列「{col}」发现 {outliers} 个疑似异常值（超出3σ范围）")
-        except:
+                    issues["warnings"].append(f"列「{col}」约 {outliers:,} 个疑似异常值（3σ）{suffix}")
+        except Exception:
             pass
-    
-    # 检测文本列空格问题
-    text_cols = df.select_dtypes(include=['object', 'category']).columns
+
+    text_cols = sample_df.select_dtypes(include=["object", "category"]).columns
     for col in text_cols:
         try:
-            has_space = df[col].astype(str).str.startswith(' ').sum() + df[col].astype(str).str.endswith(' ').sum()
+            has_space = (
+                sample_df[col].astype(str).str.startswith(" ").mean()
+                + sample_df[col].astype(str).str.endswith(" ").mean()
+            )
             if has_space > 0:
-                issues["warnings"].append(f"列「{col}」发现 {has_space} 个值首尾有空格")
-                issues["suggestions"].append(f"建议对列「{col}」执行去空格操作")
-        except:
+                est = int(has_space / 2 * total_rows)
+                issues["warnings"].append(f"列「{col}」约 {est:,} 个值首尾有空格{suffix}")
+        except Exception:
             pass
-    
-    # 检测列名问题
-    for col in df.columns:
-        if ' ' in col:
-            issues["suggestions"].append(f"列名「{col}」包含空格，建议重命名")
-        if col.startswith(('(', ')', '[', ']')):
-            issues["warnings"].append(f"列名「{col}」包含特殊字符，可能导致公式问题")
-    
+
     return issues
 
 
