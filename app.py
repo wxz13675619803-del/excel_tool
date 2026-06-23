@@ -14,7 +14,8 @@ from datetime import datetime
 
 from utils.helpers import (
     load_excel_cached, optimize_dtypes, df_to_excel_optimized,
-    get_col_types, generate_filename
+    get_col_types, generate_filename, detect_data_quality, get_column_stats,
+    lazy_load_large_file
 )
 from utils.ai_helper import (
     ai_insight, ai_chat_to_code, ai_explain_result,
@@ -128,6 +129,50 @@ def show_data_preview(df, title="📋 实时数据预览"):
                               key=f"prev_n_{st.session_state.get('menu_key','')}", 
                               label_visibility="collapsed")
     
+    # 快捷工具栏
+    st.markdown("**⚡ 快捷操作：**")
+    quick_btns = st.columns([2, 2, 2, 2, 2, 2])
+    with quick_btns[0]:
+        if st.button("🗑️ 删除空行", use_container_width=True):
+            save_snapshot("删除空行")
+            before = len(df)
+            df = df.dropna(how='all').reset_index(drop=True)
+            st.session_state.df = df
+            st.toast(f"✅ 删除 {before - len(df)} 行")
+            st.rerun()
+    with quick_btns[1]:
+        if st.button("🔁 去除重复", use_container_width=True):
+            save_snapshot("去除重复")
+            before = len(df)
+            df = df.drop_duplicates().reset_index(drop=True)
+            st.session_state.df = df
+            st.toast(f"✅ 删除 {before - len(df)} 条重复")
+            st.rerun()
+    with quick_btns[2]:
+        if st.button("✂️ 去除空格", use_container_width=True):
+            save_snapshot("去空格")
+            text_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            for c in text_cols:
+                df[c] = df[c].astype(str).str.strip()
+            st.session_state.df = df
+            st.toast("✅ 已清理")
+            st.rerun()
+    with quick_btns[3]:
+        csv = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 CSV", csv,
+                          file_name=f"数据_{datetime.now().strftime('%H%M%S')}.csv",
+                          mime="text/csv", use_container_width=True, key=f"dl_csv")
+    with quick_btns[4]:
+        output = df_to_excel_optimized({"Sheet1": df})
+        st.download_button("📥 Excel", output,
+                          file_name=f"数据_{datetime.now().strftime('%H%M%S')}.xlsx",
+                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                          use_container_width=True, key=f"dl_xlsx")
+    with quick_btns[5]:
+        if st.button("🧹 清除高亮", use_container_width=True):
+            st.session_state.new_cols = []
+            st.rerun()
+    
     # 显示数据，新列加样式
     if new_cols_set:
         def highlight_new(s):
@@ -164,10 +209,21 @@ with st.sidebar:
             st.session_state.redo_stack = []
             st.session_state.op_log = []
             st.session_state.new_cols = []
+            st.session_state.file_complete = True
         
         with st.spinner("读取中..."):
             try:
-                st.session_state.sheets = load_excel_cached(file_bytes, uploaded_file.name)
+                # 大数据量提示
+                file_size_mb = len(file_bytes) / (1024 * 1024)
+                if file_size_mb > 10:
+                    st.warning(f"⚠️ 文件较大 ({file_size_mb:.1f} MB)，正在进行懒加载...")
+                    st.session_state.sheets, st.session_state.file_complete = lazy_load_large_file(
+                        file_bytes, uploaded_file.name, max_rows=20000
+                    )
+                else:
+                    st.session_state.sheets = load_excel_cached(file_bytes, uploaded_file.name)
+                    st.session_state.file_complete = True
+                
                 sheet_names = list(st.session_state.sheets.keys())
                 
                 if len(sheet_names) > 1:
@@ -184,6 +240,10 @@ with st.sidebar:
                     st.session_state.original_df = raw_df.copy()
                     st.session_state.history = []
                     st.session_state.new_cols = []
+                
+                # 文件未完整加载提示
+                if not st.session_state.file_complete:
+                    st.info("💡 文件过大，仅加载了前20000行进行预览。如需处理全部数据，请使用较小的文件或在本地运行。")
             except Exception as e:
                 st.error(friendly_error(e))
     
@@ -601,49 +661,237 @@ elif menu == "📈 图表":
 if menu == "🏠 数据":
     st.subheader("📋 数据查看与编辑")
     
-    # 快捷操作
-    qc1, qc2, qc3, qc4 = st.columns(4)
-    with qc1:
-        if st.button("🗑️ 删除空行", use_container_width=True):
-            save_snapshot("删除空行")
-            before = len(df)
-            df = df.dropna(how='all').reset_index(drop=True)
-            st.session_state.df = df
-            st.toast(f"✅ 删除 {before - len(df)} 行")
-            st.rerun()
-    with qc2:
-        if st.button("🔁 去除重复", use_container_width=True):
-            save_snapshot("去除重复")
-            before = len(df)
-            df = df.drop_duplicates().reset_index(drop=True)
-            st.session_state.df = df
-            st.toast(f"✅ 删除 {before - len(df)} 条重复")
-            st.rerun()
-    with qc3:
-        if st.button("✂️ 去除空格", use_container_width=True):
-            save_snapshot("去空格")
-            for c in text_cols:
-                df[c] = df[c].astype(str).str.strip()
-            st.session_state.df = df
-            st.toast("✅ 已清理")
-            st.rerun()
-    with qc4:
-        if st.button("🧹 清除高亮", use_container_width=True):
-            st.session_state.new_cols = []
-            st.rerun()
+    dt1, dt2 = st.tabs(["📊 数据视图", "🎨 条件格式"])
     
-    st.markdown("---")
+    with dt1:
+        # 数据质量检测报告
+        with st.expander("🔍 数据质量检测报告", expanded=True):
+            quality = detect_data_quality(df)
+            stats = quality["stats"]
+            
+            # 基本统计指标
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("总行数", f"{stats['rows']:,}")
+            with c2:
+                st.metric("总列数", stats['columns'])
+            with c3:
+                st.metric("总单元格", f"{stats['total_cells']:,}")
+            with c4:
+                st.metric("缺失单元格", f"{stats['missing_cells']:,}")
+            with c5:
+                st.metric("缺失率", f"{stats['missing_rate']}%")
+            
+            # 问题提示
+            if quality["errors"]:
+                st.error(f"❌ 发现 {len(quality['errors'])} 个严重问题：")
+                for e in quality["errors"]:
+                    st.markdown(f"- {e}")
+            
+            if quality["warnings"]:
+                st.warning(f"⚠️ 发现 {len(quality['warnings'])} 个警告：")
+                for w in quality["warnings"]:
+                    st.markdown(f"- {w}")
+            
+            if quality["suggestions"]:
+                st.info(f"💡 建议操作：")
+                for s in quality["suggestions"]:
+                    st.markdown(f"- {s}")
+            
+            if not quality["errors"] and not quality["warnings"] and not quality["suggestions"]:
+                st.success("🎉 数据质量良好，未发现问题")
+        
+        st.markdown("---")
+        
+        # 快捷操作
+        qc1, qc2, qc3, qc4 = st.columns(4)
+        with qc1:
+            if st.button("🗑️ 删除空行", use_container_width=True):
+                save_snapshot("删除空行")
+                before = len(df)
+                df = df.dropna(how='all').reset_index(drop=True)
+                st.session_state.df = df
+                st.toast(f"✅ 删除 {before - len(df)} 行")
+                st.rerun()
+        with qc2:
+            if st.button("🔁 去除重复", use_container_width=True):
+                save_snapshot("去除重复")
+                before = len(df)
+                df = df.drop_duplicates().reset_index(drop=True)
+                st.session_state.df = df
+                st.toast(f"✅ 删除 {before - len(df)} 条重复")
+                st.rerun()
+        with qc3:
+            if st.button("✂️ 去除空格", use_container_width=True):
+                save_snapshot("去空格")
+                for c in text_cols:
+                    df[c] = df[c].astype(str).str.strip()
+                st.session_state.df = df
+                st.toast("✅ 已清理")
+                st.rerun()
+        with qc4:
+            if st.button("🧹 清除高亮", use_container_width=True):
+                st.session_state.new_cols = []
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # 可编辑表格
+        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", 
+                                height=500, key="main_editor")
+        
+        if not edited.equals(df):
+            if st.button("💾 保存修改", type="primary"):
+                save_snapshot("编辑数据")
+                st.session_state.df = edited
+                st.toast("✅ 已保存")
+                st.rerun()
     
-    # 可编辑表格
-    edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", 
-                            height=500, key="main_editor")
-    
-    if not edited.equals(df):
-        if st.button("💾 保存修改", type="primary"):
-            save_snapshot("编辑数据")
-            st.session_state.df = edited
-            st.toast("✅ 已保存")
-            st.rerun()
+    # ===== 条件格式 =====
+    with dt2:
+        st.markdown("##### 🎨 条件格式设置")
+        
+        format_type = st.radio("格式类型", 
+            ["📊 色阶（数值列）", "🏷️ 图标集", "🎯 自定义条件", "🔔 高亮重复值"],
+            horizontal=True, label_visibility="collapsed")
+        
+        st.markdown("---")
+        
+        if format_type == "📊 色阶（数值列）":
+            col = st.selectbox("选择数值列", numeric_cols, key="cf_col")
+            c1, c2 = st.columns(2)
+            with c1:
+                min_color = st.color_picker("最小值颜色", "#eff6ff", key="cf_min")
+            with c2:
+                max_color = st.color_picker("最大值颜色", "#4f46e5", key="cf_max")
+            
+            if st.button("✅ 应用色阶", type="primary", key="cf_b"):
+                try:
+                    def color_scale(val):
+                        col_data = df[col]
+                        if pd.isna(val):
+                            return ''
+                        min_val = col_data.min()
+                        max_val = col_data.max()
+                        if max_val == min_val:
+                            return f'background-color: {min_color}'
+                        ratio = (val - min_val) / (max_val - min_val)
+                        r = int(int(min_color[1:3], 16) * (1-ratio) + int(max_color[1:3], 16) * ratio)
+                        g = int(int(min_color[3:5], 16) * (1-ratio) + int(max_color[3:5], 16) * ratio)
+                        b = int(int(min_color[5:7], 16) * (1-ratio) + int(max_color[5:7], 16) * ratio)
+                        return f'background-color: rgb({r},{g},{b})'
+                    
+                    styled = df.style.applymap(color_scale, subset=[col])
+                    st.dataframe(styled, use_container_width=True, height=500)
+                except Exception as e:
+                    st.error(friendly_error(e))
+        
+        elif format_type == "🏷️ 图标集":
+            col = st.selectbox("选择数值列", numeric_cols, key="icon_col")
+            icon_type = st.selectbox("图标类型", ["🏆 奖牌", "📈 箭头", "🔴🟡🟢 红绿灯"], key="icon_type")
+            
+            if st.button("✅ 应用图标", type="primary", key="icon_b"):
+                try:
+                    col_data = df[col]
+                    q1, q2, q3 = col_data.quantile([0.25, 0.5, 0.75])
+                    
+                    def add_icon(val):
+                        if pd.isna(val):
+                            return ''
+                        if icon_type == "🏆 奖牌":
+                            if val >= q3:
+                                return '🥇'
+                            elif val >= q2:
+                                return '🥈'
+                            elif val >= q1:
+                                return '🥉'
+                            else:
+                                return ''
+                        elif icon_type == "📈 箭头":
+                            if val >= q3:
+                                return '⬆️'
+                            elif val >= q2:
+                                return '➡️'
+                            else:
+                                return '⬇️'
+                        else:
+                            if val >= q3:
+                                return '🟢'
+                            elif val >= q1:
+                                return '🟡'
+                            else:
+                                return '🔴'
+                    
+                    new_col_name = f"{col}_图标"
+                    df[new_col_name] = col_data.apply(add_icon)
+                    mark_new_col(new_col_name)
+                    st.session_state.df = df
+                    st.toast(f"✅ 已生成「{new_col_name}」")
+                    st.rerun()
+                except Exception as e:
+                    st.error(friendly_error(e))
+        
+        elif format_type == "🎯 自定义条件":
+            c1, c2 = st.columns(2)
+            with c1:
+                cond_col = st.selectbox("选择列", all_cols, key="cond_col")
+            with c2:
+                cond_op = st.selectbox("条件", [">", ">=", "<", "<=", "==", "!=", "包含", "为空"], key="cond_op")
+            
+            cond_val = ""
+            if cond_op != "为空":
+                cond_val = st.text_input("条件值", key="cond_val")
+            
+            highlight_color = st.color_picker("高亮颜色", "#fef3c7", key="hl_color")
+            
+            if st.button("✅ 预览效果", type="primary", key="cond_b"):
+                try:
+                    def highlight_cell(val, idx):
+                        cell_val = df.iloc[idx, df.columns.get_loc(cond_col)]
+                        try:
+                            threshold = float(cond_val) if cond_val else 0
+                            col_num = pd.to_numeric(cell_val, errors='coerce')
+                            use_num = True
+                        except:
+                            threshold = cond_val
+                            col_num = cell_val
+                            use_num = False
+                        
+                        cd = col_num if use_num else cell_val
+                        cond_map = {
+                            ">": cd > threshold, ">=": cd >= threshold,
+                            "<": cd < threshold, "<=": cd <= threshold,
+                            "==": cd == threshold, "!=": cd != threshold,
+                            "包含": str(cell_val).contains(str(cond_val), na=False),
+                            "为空": pd.isna(cell_val) or (str(cell_val).strip() == ''),
+                        }
+                        if cond_map[cond_op]:
+                            return f'background-color: {highlight_color}'
+                        return ''
+                    
+                    styled = df.style.apply(lambda x: [highlight_cell(x.iloc[i], i) for i in range(len(x))], axis=1)
+                    st.dataframe(styled, use_container_width=True, height=500)
+                except Exception as e:
+                    st.error(friendly_error(e))
+        
+        elif format_type == "🔔 高亮重复值":
+            cols = st.multiselect("选择判重列（留空=所有列）", all_cols, key="dup_cols")
+            dup_color = st.color_picker("高亮颜色", "#fef3c7", key="dup_color")
+            
+            if st.button("✅ 高亮重复", type="primary", key="dup_b"):
+                try:
+                    subset = cols if cols else None
+                    duplicates = df.duplicated(subset=subset, keep=False)
+                    
+                    def highlight_dup(val, idx):
+                        if duplicates.iloc[idx]:
+                            return f'background-color: {dup_color}'
+                        return ''
+                    
+                    styled = df.style.apply(lambda x: [highlight_dup(x.iloc[i], i) for i in range(len(x))], axis=1)
+                    st.dataframe(styled, use_container_width=True, height=500)
+                except Exception as e:
+                    st.error(friendly_error(e))
 
 
 # ================================================================
@@ -652,7 +900,7 @@ if menu == "🏠 数据":
 elif menu == "🧹 清洗":
     st.subheader("🧹 数据清洗")
     
-    t1, t2, t3, t4 = st.tabs(["缺失值", "列管理", "排序筛选", "类型转换"])
+    t1, t2, t3, t4, t5 = st.tabs(["缺失值", "列管理", "排序筛选", "类型转换", "⚡ 批量操作"])
     
     with t1:
         missing = df.isna().sum()
@@ -821,6 +1069,108 @@ elif menu == "🧹 清洗":
                 st.rerun()
             except Exception as e:
                 st.error(friendly_error(e))
+    
+    # ===== 批量操作 =====
+    with t5:
+        st.markdown("##### ⚡ 一键批量处理")
+        
+        st.markdown("**📦 批量填充缺失值**")
+        c1, c2 = st.columns(2)
+        with c1:
+            batch_fill_cols = st.multiselect("选择多列", all_cols, key="bfc")
+        with c2:
+            batch_fill_method = st.selectbox("填充方式", 
+                ["填充 0", "填充均值", "填充中位数", "填充众数", "填充空字符串"], 
+                key="bfm")
+        if st.button("✅ 批量填充", type="primary", key="bbf") and batch_fill_cols:
+            save_snapshot("批量填充")
+            try:
+                for col in batch_fill_cols:
+                    if batch_fill_method == "填充 0":
+                        df[col] = df[col].fillna(0)
+                    elif batch_fill_method == "填充均值" and pd.api.types.is_numeric_dtype(df[col]):
+                        df[col] = df[col].fillna(df[col].mean())
+                    elif batch_fill_method == "填充中位数" and pd.api.types.is_numeric_dtype(df[col]):
+                        df[col] = df[col].fillna(df[col].median())
+                    elif batch_fill_method == "填充众数":
+                        m = df[col].mode()
+                        if len(m):
+                            df[col] = df[col].fillna(m[0])
+                    elif batch_fill_method == "填充空字符串":
+                        df[col] = df[col].fillna("")
+                st.session_state.df = df
+                st.toast(f"✅ 已批量处理 {len(batch_fill_cols)} 列")
+                st.rerun()
+            except Exception as e:
+                st.error(friendly_error(e))
+        
+        st.markdown("---")
+        
+        st.markdown("**🔄 批量类型转换**")
+        c1, c2 = st.columns(2)
+        with c1:
+            batch_type_cols = st.multiselect("选择多列", all_cols, key="btc")
+        with c2:
+            batch_type = st.selectbox("目标类型", ["文本", "整数", "小数", "日期"], key="btt")
+        if st.button("✅ 批量转换", type="primary", key="bbt") and batch_type_cols:
+            save_snapshot("批量转换")
+            try:
+                for col in batch_type_cols:
+                    if batch_type == "文本":
+                        df[col] = df[col].astype(str)
+                    elif batch_type == "整数":
+                        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                    elif batch_type == "小数":
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                    elif batch_type == "日期":
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                st.session_state.df = df
+                st.toast(f"✅ 已批量转换 {len(batch_type_cols)} 列")
+                st.rerun()
+            except Exception as e:
+                st.error(friendly_error(e))
+        
+        st.markdown("---")
+        
+        st.markdown("**🧹 批量文本处理**")
+        c1, c2 = st.columns(2)
+        with c1:
+            batch_text_cols = st.multiselect("选择多列", text_cols, key="btxc")
+        with c2:
+            batch_text_op = st.selectbox("操作", 
+                ["去首尾空格", "转小写", "转大写", "首字母大写", "去除所有空格"], 
+                key="btxo")
+        if st.button("✅ 批量处理", type="primary", key="bbxt") and batch_text_cols:
+            save_snapshot("批量文本")
+            try:
+                for col in batch_text_cols:
+                    s = df[col].astype(str)
+                    if batch_text_op == "去首尾空格":
+                        df[col] = s.str.strip()
+                    elif batch_text_op == "转小写":
+                        df[col] = s.str.lower()
+                    elif batch_text_op == "转大写":
+                        df[col] = s.str.upper()
+                    elif batch_text_op == "首字母大写":
+                        df[col] = s.str.title()
+                    elif batch_text_op == "去除所有空格":
+                        df[col] = s.str.replace(r'\s+', '', regex=True)
+                st.session_state.df = df
+                st.toast(f"✅ 已批量处理 {len(batch_text_cols)} 列")
+                st.rerun()
+            except Exception as e:
+                st.error(friendly_error(e))
+        
+        st.markdown("---")
+        
+        st.markdown("**🗑️ 批量删除**")
+        batch_del_cols = st.multiselect("选择要删除的列", all_cols, key="bdc2")
+        if st.button("🗑️ 批量删除列", type="primary", key="bbdc") and batch_del_cols:
+            save_snapshot("批量删除")
+            df = df.drop(columns=batch_del_cols)
+            st.session_state.df = df
+            st.toast(f"✅ 已删除 {len(batch_del_cols)} 列")
+            st.rerun()
     
     show_data_preview(df)
 
@@ -1701,31 +2051,72 @@ elif menu == "📊 汇总":
     st.markdown("---")
     
     if action == "📊 分组汇总（透视表）":
-        c1, c2 = st.columns(2)
+        st.markdown("**📐 高级透视表设置**")
+        
+        c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
-            gc = st.multiselect("分组列", all_cols, key="pv_g")
+            row_group = st.multiselect("行分组", all_cols, key="pv_row")
         with c2:
-            ac = st.multiselect("汇总列（数值）", numeric_cols, key="pv_a")
+            col_group = st.multiselect("列分组（可选）", all_cols, key="pv_col")
+        with c3:
+            value_cols = st.multiselect("汇总列（数值）", numeric_cols, key="pv_val")
         
-        af = st.multiselect("汇总方式", ["求和", "平均值", "计数", "最大值", "最小值"],
-                            default=["求和"], key="pv_f")
+        agg_funcs = st.multiselect("汇总方式", 
+            ["求和", "平均值", "计数", "最大值", "最小值", "标准差", "方差", "中位数"],
+            default=["求和"], key="pv_agg")
         
-        if st.button("✅ 生成透视表", type="primary", key="pv_b") and gc and ac and af:
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            sort_by = st.selectbox("排序依据", ["无"] + value_cols, key="pv_sort")
+        with c2:
+            sort_order = st.selectbox("排序", ["降序", "升序"], key="pv_order")
+        
+        show_total = st.checkbox("显示汇总行", value=True, key="pv_total")
+        
+        if st.button("✅ 生成透视表", type="primary", key="pv_b") and row_group and value_cols:
             try:
-                fm = {"求和": "sum", "平均值": "mean", "计数": "count", "最大值": "max", "最小值": "min"}
-                funcs = [fm[f] for f in af]
-                pivot = df.groupby(gc)[ac].agg(funcs).round(2)
+                fm = {"求和": "sum", "平均值": "mean", "计数": "count", "最大值": "max", 
+                      "最小值": "min", "标准差": "std", "方差": "var", "中位数": "median"}
+                funcs = [fm[f] for f in agg_funcs]
+                
+                # 构建透视表
+                if col_group:
+                    pivot = df.pivot_table(
+                        index=row_group,
+                        columns=col_group,
+                        values=value_cols,
+                        aggfunc=funcs,
+                        margins=show_total,
+                        margins_name="合计"
+                    ).round(2)
+                else:
+                    pivot = df.groupby(row_group)[value_cols].agg(funcs).round(2)
+                
+                # 处理多级列名
                 if isinstance(pivot.columns, pd.MultiIndex):
-                    pivot.columns = ['_'.join(c).strip() for c in pivot.columns]
+                    pivot.columns = ['_'.join(str(c) for c in col).strip() for col in pivot.columns]
+                
                 pivot = pivot.reset_index()
+                
+                # 排序
+                if sort_by != "无":
+                    sorted_cols = [c for c in pivot.columns if sort_by in c]
+                    if sorted_cols:
+                        pivot = pivot.sort_values(sorted_cols[0], ascending=(sort_order == "升序"))
                 
                 st.markdown("##### 📋 汇总结果")
                 st.dataframe(pivot, use_container_width=True, height=400)
                 st.session_state['pivot_table'] = pivot
                 
+                # 导出选项
+                csv = pivot.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("⬇️ 下载透视表", csv,
+                                  file_name=f"透视表_{datetime.now().strftime('%H%M%S')}.csv",
+                                  mime="text/csv")
+                
                 if st.checkbox("合并回主表", key="pv_m"):
                     save_snapshot("合并汇总")
-                    df = df.merge(pivot, on=gc, how='left', suffixes=('', '_汇总'))
+                    df = df.merge(pivot, on=row_group, how='left', suffixes=('', '_汇总'))
                     st.session_state.df = df
                     st.toast("✅ 已合并")
                     st.rerun()
