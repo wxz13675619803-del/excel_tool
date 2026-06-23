@@ -7,37 +7,64 @@ import streamlit as st
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_excel_cached(file_content: bytes, file_name: str) -> dict:
+def load_excel_cached(file_content: bytes, file_name: str, max_cols: int = 200) -> dict:
     """
-    缓存加载Excel文件
+    缓存加载Excel文件（支持宽表优化）
     使用文件内容的hash作为缓存key，避免重复读取
+    max_cols: 最大加载列数，超过时仅加载前max_cols列用于预览
     """
     from io import BytesIO
     buffer = BytesIO(file_content)
     
     if file_name.endswith('.csv'):
-        # CSV自动检测编码
         for enc in ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin1']:
             try:
                 buffer.seek(0)
-                df = pd.read_csv(buffer, encoding=enc)
-                return {"Sheet1": df}
+                # 先读取前几行检测列数
+                df_sample = pd.read_csv(buffer, encoding=enc, nrows=5)
+                actual_cols = len(df_sample.columns)
+                
+                buffer.seek(0)
+                if actual_cols > max_cols:
+                    df = pd.read_csv(buffer, encoding=enc, usecols=range(max_cols))
+                    return {"Sheet1": df, "__meta__": {"total_cols": actual_cols, "partial_load": True}}
+                else:
+                    df = pd.read_csv(buffer, encoding=enc)
+                    return {"Sheet1": df, "__meta__": {"total_cols": actual_cols, "partial_load": False}}
             except (UnicodeDecodeError, pd.errors.ParserError):
                 continue
         raise ValueError("无法识别CSV编码")
     else:
         xls = pd.ExcelFile(buffer)
         sheets = {}
+        meta = {}
         for name in xls.sheet_names:
-            sheets[name] = pd.read_excel(xls, sheet_name=name)
+            df_sample = pd.read_excel(xls, sheet_name=name, nrows=5)
+            actual_cols = len(df_sample.columns)
+            
+            if actual_cols > max_cols:
+                df = pd.read_excel(xls, sheet_name=name, usecols=range(max_cols))
+                sheets[name] = df
+                meta[name] = {"total_cols": actual_cols, "partial_load": True}
+            else:
+                df = pd.read_excel(xls, sheet_name=name)
+                sheets[name] = df
+                meta[name] = {"total_cols": actual_cols, "partial_load": False}
+        
+        if meta:
+            sheets["__meta__"] = meta
         return sheets
 
 
-def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+def optimize_dtypes(df: pd.DataFrame, max_cols_optimize: int = 200) -> pd.DataFrame:
     """
-    自动优化DataFrame内存占用
+    自动优化DataFrame内存占用（支持宽表优化）
     将大数据的内存减少50%~80%
+    max_cols_optimize: 超过此列数时跳过优化（宽表性能优化）
     """
+    if len(df.columns) > max_cols_optimize:
+        return df
+    
     for col in df.columns:
         col_type = df[col].dtype
 
