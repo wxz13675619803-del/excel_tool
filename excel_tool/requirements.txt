@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+numpy
+simpleeval
+pyinstaller
+streamlit-option-menu
+plotly
+openai
